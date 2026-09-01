@@ -1,0 +1,6 @@
+{
+  "name": "Entropy",
+  "description": "Developer-focused UI for managing and injecting network failures with Toxiproxy",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

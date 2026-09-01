@@ -1,11 +1,32 @@
-<div align="center">
+# Toxiproxy Controller
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+Developer-focused UI for managing and injecting network failures with Toxiproxy.
 
-  <h1>Built with AI Studio</h2>
+## Quick Start
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+1. Ensure you have Docker and Docker Compose installed.
+2. Run the application locally:
+   ```bash
+   docker compose up
+   ```
+3. Open http://localhost:3000 in your browser.
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+## Features
 
-</div>
+- **Dashboard**: View Toxiproxy connection status and overall proxy activity.
+- **Proxy Management**: Create, view, edit, and delete proxies.
+- **Toxic Management**: Add, edit, enable, disable, and delete toxics for each proxy.
+
+## Architecture
+
+- **Frontend**: React application for managing proxies and toxics.
+- **Backend**: Node.js/Express server acting as an abstraction layer over the Toxiproxy API.
+- **Toxiproxy**: The chaos engine.
+
+## API
+
+The backend exposes the following REST endpoints:
+
+- `GET /api/proxies`
+- `POST /api/proxies`
+- ... (and more)
