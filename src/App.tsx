@@ -5,6 +5,7 @@
 
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import { motion } from 'motion/react';
 
 interface Proxy {
   name: string;
@@ -57,34 +58,36 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-50 text-neutral-900 p-8">
-      <header className="mb-8">
-        <h1 className="text-3xl font-bold">Entropy</h1>
-        <p className="text-neutral-600">Manage your network failures</p>
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-8">
+      <header className="mb-8 border-b border-slate-800 pb-6">
+        <h1 className="text-4xl font-extrabold tracking-tighter text-white">Entropy</h1>
+        <p className="text-slate-400 mt-2 font-mono text-sm uppercase tracking-widest">Chaos Injection Engine</p>
       </header>
 
-      <section className="mb-8 p-4 bg-white rounded-lg shadow-sm border border-neutral-200">
-        <h2 className="text-xl font-semibold mb-4">Create Proxy</h2>
+      <section className="mb-12 p-6 bg-slate-900 rounded border border-slate-800">
+        <h2 className="text-xl font-semibold mb-6 text-white">Create Proxy</h2>
         <form onSubmit={createProxy} className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <input name="name" placeholder="Proxy Name" className="p-2 border rounded" required />
-          <input name="listen" placeholder="Listen (e.g. 0.0.0.0:8666)" className="p-2 border rounded" required />
-          <input name="upstream" placeholder="Upstream (e.g. service:8080)" className="p-2 border rounded" required />
-          <button type="submit" className="p-2 bg-neutral-900 text-white rounded">Create Proxy</button>
+          <input name="name" placeholder="Proxy Name" className="p-3 bg-slate-800 border border-slate-700 rounded text-white focus:outline-none focus:border-indigo-500" required />
+          <input name="listen" placeholder="Listen (e.g. 0.0.0.0:8666)" className="p-3 bg-slate-800 border border-slate-700 rounded text-white focus:outline-none focus:border-indigo-500" required />
+          <input name="upstream" placeholder="Upstream (e.g. service:8080)" className="p-3 bg-slate-800 border border-slate-700 rounded text-white focus:outline-none focus:border-indigo-500" required />
+          <button type="submit" className="p-3 bg-white text-slate-950 font-bold rounded hover:bg-slate-200 transition-colors">Create Proxy</button>
         </form>
       </section>
 
       <section>
-        <h2 className="text-xl font-semibold mb-4">Proxies</h2>
-        {loading && <p>Loading...</p>}
-        {error && <p className="text-red-600">{error}</p>}
-        {!loading && !error && proxies.length === 0 && <p className="text-neutral-600">No proxies defined.</p>}
-        <div className="grid gap-4">
+        <h2 className="text-xl font-semibold mb-6 text-white">Proxies</h2>
+        {loading && <p className="text-slate-400 font-mono">Initializing connection...</p>}
+        {error && <p className="text-red-400 font-mono">{error}</p>}
+        {!loading && !error && proxies.length === 0 && <p className="text-slate-500 font-mono italic">No proxies defined.</p>}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {proxies.map(proxy => (
-            <div key={proxy.name} className="p-4 bg-white rounded-lg shadow-sm border border-neutral-200">
-              <h3 className="font-bold">{proxy.name}</h3>
-              <p className="text-sm text-neutral-600">Listen: {proxy.listen}</p>
-              <p className="text-sm text-neutral-600">Upstream: {proxy.upstream}</p>
-            </div>
+            <motion.div key={proxy.name} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="p-6 bg-slate-900 rounded border border-slate-800 hover:border-slate-600 transition-colors">
+              <h3 className="font-bold text-lg text-white mb-2">{proxy.name}</h3>
+              <div className="text-sm font-mono text-slate-400">
+                <p>Listen: {proxy.listen}</p>
+                <p>Upstream: {proxy.upstream}</p>
+              </div>
+            </motion.div>
           ))}
         </div>
       </section>
