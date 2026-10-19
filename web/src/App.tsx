@@ -48,7 +48,7 @@ export default function App() {
   let page = null
   if (env) {
     if (route[0] === 'dependencies' && route[1]) {
-      page = <DependencyDetail env={env} name={decodeURIComponent(route[1])} />
+      page = <DependencyDetail env={env} name={decodeURIComponent(route[1])} onChanged={refresh} />
     } else if (route[0] === 'dependencies') {
       page = <DependenciesList env={env} />
     } else if (route[0] === 'services' && route[1]) {

@@ -18,7 +18,7 @@ dependencies:
 services:
   # Replace your-service-name with your own service. Until something answers on this URL it shows as Unreachable.
   - name: your-service-name
-    baseUrl: http://127.0.0.1:8080/your-service-name/b2b
+    baseUrl: http://127.0.0.1:8080/access-token/b2b
     uses: [redis]
     healthCommand: your-service-name
     # Commands you can run from the service's page (or `entropy run your-service-name/<name>`).
@@ -27,6 +27,6 @@ services:
     #
     commands:
       - name: your-service-name
-        run: bru run "path/to/command.yml" --env "your environment" --sandbox="your sandbox(ex: developer)"
-        cwd: D:path/to/bruno-collection   # default: this file's folder
+        run: 'bru run "Oauth Service\Access Token B2B.yml" --env "APV TestH - thst" --sandbox=developer'
+        cwd: D:/new-spe/repositories/bruno-new-version/bruno-collection   # default: this file's folder
         timeoutSec: 30                          # default 30, max 600

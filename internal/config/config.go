@@ -26,61 +26,61 @@ const DefaultToxiproxyAPI = "http://localhost:8474"
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 type Config struct {
-	Environment  Environment  `yaml:"environment"`
-	Toxiproxy    Toxiproxy    `yaml:"toxiproxy"`
-	Dependencies []Dependency `yaml:"dependencies"`
-	Services     []Service    `yaml:"services"`
+	Environment  Environment  `yaml:"environment" json:"environment"`
+	Toxiproxy    Toxiproxy    `yaml:"toxiproxy" json:"toxiproxy"`
+	Dependencies []Dependency `yaml:"dependencies" json:"dependencies"`
+	Services     []Service    `yaml:"services" json:"services"`
 }
 
 type Environment struct {
-	Name string `yaml:"name"`
+	Name string `yaml:"name" json:"name"`
 }
 
 type Toxiproxy struct {
-	API string `yaml:"api"`
+	API string `yaml:"api" json:"api"`
 }
 
 type Dependency struct {
-	Name string `yaml:"name"`
-	Kind string `yaml:"kind"`
+	Name string `yaml:"name" json:"name"`
+	Kind string `yaml:"kind" json:"kind"`
 	// Address is where services, and Entropy's checks, reach the dependency
 	// through the proxy, e.g. localhost:6379.
-	Address string `yaml:"address"`
+	Address string `yaml:"address" json:"address"`
 	// Upstream is the real dependency as Toxiproxy sees it, e.g. redis:6379.
-	Upstream string `yaml:"upstream"`
+	Upstream string `yaml:"upstream" json:"upstream"`
 	// Listen is the proxy's listen address inside Toxiproxy.
 	// Defaults to 0.0.0.0 with the port from Address.
-	Listen string `yaml:"listen"`
+	Listen string `yaml:"listen" json:"listen"`
 	// Redirect (https only) means the hostname is pointed at Toxiproxy through
 	// the hosts file, so the check also verifies it resolves to loopback.
-	Redirect bool `yaml:"redirect"`
+	Redirect bool `yaml:"redirect" json:"redirect"`
 }
 
 type Service struct {
-	Name        string `yaml:"name"`
-	BaseURL     string `yaml:"baseUrl"`
-	HealthCheck string `yaml:"healthCheck"`
+	Name        string `yaml:"name" json:"name"`
+	BaseURL     string `yaml:"baseUrl" json:"baseUrl"`
+	HealthCheck string `yaml:"healthCheck" json:"healthCheck"`
 	// HealthCommand names one of Commands to use as the health check instead:
 	// exit code 0 means Reachable.
-	HealthCommand string `yaml:"healthCommand"`
+	HealthCommand string `yaml:"healthCommand" json:"healthCommand"`
 	// HealthEverySec re-runs HealthCommand in the background. 0, the default,
 	// runs it only on Sync, on "Check now" and before experiments, because a
 	// command can be slow and have side effects (e.g. issuing tokens).
-	HealthEverySec int       `yaml:"healthEverySec"`
-	Uses           []string  `yaml:"uses"`
-	Commands       []Command `yaml:"commands"`
+	HealthEverySec int       `yaml:"healthEverySec" json:"healthEverySec"`
+	Uses           []string  `yaml:"uses" json:"uses"`
+	Commands       []Command `yaml:"commands" json:"commands"`
 }
 
 // Command is a command line that exercises the service, e.g. a `bru run`.
 // Exit code 0 means the request behaved as expected.
 type Command struct {
-	Name string `yaml:"name"`
+	Name string `yaml:"name" json:"name"`
 	// Run is the command line as you'd type it: cmd.exe runs it on Windows, sh elsewhere.
-	Run string `yaml:"run"`
+	Run string `yaml:"run" json:"run"`
 	// Cwd is the working directory. Relative paths are resolved against the
 	// config file's folder, which is also the default.
-	Cwd        string `yaml:"cwd"`
-	TimeoutSec int    `yaml:"timeoutSec"`
+	Cwd        string `yaml:"cwd" json:"cwd"`
+	TimeoutSec int    `yaml:"timeoutSec" json:"timeoutSec"`
 }
 
 const (
@@ -96,6 +96,11 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parse(data, path)
+}
+
+// decode reads the file's content as written, without defaults or validation.
+func decode(data []byte, path string) (*Config, error) {
 	var cfg Config
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -105,11 +110,20 @@ func Load(path string) (*Config, error) {
 		}
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	return &cfg, nil
+}
+
+// parse is Load for content that may not be on disk yet; path is where it lives.
+func parse(data []byte, path string) (*Config, error) {
+	cfg, err := decode(data, path)
+	if err != nil {
+		return nil, err
+	}
 	cfg.applyDefaults(filepath.Dir(path))
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("%s:\n%w", path, err)
 	}
-	return &cfg, nil
+	return cfg, nil
 }
 
 // applyDefaults fills in optional fields; dir is the config file's folder.

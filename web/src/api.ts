@@ -85,6 +85,50 @@ export interface Environment {
   services: Service[]
 }
 
+// The config file as written, without defaults (internal/config Config).
+// Lists the file leaves out come back as null.
+export interface RawConfig {
+  environment: { name: string }
+  toxiproxy: { api: string }
+  dependencies: { name: string; kind: string; address: string; upstream: string; listen: string; redirect: boolean }[] | null
+  services: {
+    name: string
+    baseUrl: string
+    healthCheck: string
+    healthCommand: string
+    healthEverySec: number
+    uses: string[] | null
+    commands: { name: string }[] | null
+  }[] | null
+}
+
+export interface ConfigSnapshot {
+  hash: string
+  config: RawConfig
+}
+
+export interface EnvironmentFields { name: string; toxiproxyApi: string }
+export interface DependencyFields { name: string; address: string; upstream: string; listen: string; redirect: boolean }
+export interface ServiceFields {
+  name: string
+  baseUrl: string
+  healthCheck: string
+  healthCommand: string
+  healthEverySec: number
+  uses: string[]
+}
+
+// Exactly one part per edit. Empty optional fields are removed from the file.
+export type ConfigEdit =
+  | { environment: EnvironmentFields }
+  | { dependency: DependencyFields }
+  | { service: ServiceFields }
+
+export interface EditResult {
+  hash: string
+  sync: SyncResult
+}
+
 async function errorFrom(res: Response): Promise<Error> {
   const body = await res.json().catch(() => ({ error: res.statusText }))
   return new Error(body.error ?? res.statusText)
@@ -101,6 +145,23 @@ export const api = {
   async sync(): Promise<SyncResult> {
     const res = await fetch('/api/sync', { method: 'POST' })
     if (!res.ok && res.status !== 422) throw await errorFrom(res)
+    return res.json()
+  },
+
+  async config(): Promise<ConfigSnapshot> {
+    const res = await fetch('/api/config')
+    if (!res.ok) throw await errorFrom(res)
+    return res.json()
+  },
+
+  // Fails with 409 if the file changed since `hash` was read, 422 if the edit makes it invalid.
+  async editConfig(hash: string, edit: ConfigEdit): Promise<EditResult> {
+    const res = await fetch('/api/config', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hash, ...edit }),
+    })
+    if (!res.ok) throw await errorFrom(res)
     return res.json()
   },
 

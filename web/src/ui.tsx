@@ -40,7 +40,3 @@ export function timeAgo(iso?: string): string {
   if (hours < 24) return `${hours} h ago`
   return new Date(iso).toLocaleString()
 }
-
-export function FromConfig() {
-  return <span className="hint">Defined in the config file</span>
-}

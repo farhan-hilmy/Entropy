@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"entropy/internal/app"
+	"entropy/internal/config"
 )
 
 func New(a *app.App, ui fs.FS) http.Handler {
@@ -30,6 +31,37 @@ func New(a *app.App, ui fs.FS) http.Handler {
 			status = http.StatusUnprocessableEntity
 		}
 		writeJSON(w, status, res)
+	})
+
+	// The config file as written, plus the hash to send back with an edit.
+	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
+		snap, err := a.Config()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, snap)
+	})
+
+	// Saves the editable fields of one part of the config, then syncs.
+	// Commands can't be edited here, only in the file.
+	mux.HandleFunc("PATCH /api/config", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Hash string `json:"hash"`
+			config.Edit
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		res, err := a.EditConfig(r.Context(), body.Hash, body.Edit)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
 	})
 
 	mux.HandleFunc("POST /api/faults/stop-all", func(w http.ResponseWriter, r *http.Request) {
@@ -75,11 +107,14 @@ func New(a *app.App, ui fs.FS) http.Handler {
 
 func writeError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
+	var invalid *config.InvalidError
 	switch {
-	case errors.Is(err, app.ErrNotFound):
+	case errors.Is(err, app.ErrNotFound), errors.Is(err, config.ErrNotFound):
 		status = http.StatusNotFound
-	case errors.Is(err, app.ErrAlreadyRunning):
+	case errors.Is(err, app.ErrAlreadyRunning), errors.Is(err, config.ErrConflict):
 		status = http.StatusConflict
+	case errors.As(err, &invalid):
+		status = http.StatusUnprocessableEntity
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }

@@ -9,7 +9,14 @@ import (
 
 func write(t *testing.T, content string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "entropy.yaml")
+	// Not t.TempDir: its cleanup fails the test when, on Windows, a virus
+	// scanner still holds a file Apply just wrote. Leftovers are harmless.
+	dir, err := os.MkdirTemp("", "entropy-config-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := filepath.Join(dir, "entropy.yaml")
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}

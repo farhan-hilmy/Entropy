@@ -1,9 +1,15 @@
 import { useState } from 'react'
-import { api, type Environment, type SyncResult } from '../api'
+import { api, type Environment, type EnvironmentFields, type SyncResult } from '../api'
+import { EditFooter, Field, TextInput, useConfigForm } from '../editing'
 import { navigate } from '../route'
 import { StatusLabel, timeAgo } from '../ui'
 
 export function Overview({ env, onSynced }: { env: Environment; onSynced: () => void }) {
+  const edit = useConfigForm<EnvironmentFields>(
+    (c) => ({ name: c.environment.name, toxiproxyApi: c.toxiproxy.api }),
+    (form) => ({ environment: form }),
+    onSynced,
+  )
   const [syncing, setSyncing] = useState(false)
   const [result, setResult] = useState<SyncResult | null>(null)
   const [syncError, setSyncError] = useState<string | null>(null)
@@ -46,9 +52,32 @@ export function Overview({ env, onSynced }: { env: Environment; onSynced: () => 
       {result && <SyncReport result={result} onDismiss={() => setResult(null)} />}
       {env.toxiproxy.status.state === 'unreachable' && (
         <div className="banner error">
-          Toxiproxy is not reachable at <code>{env.toxiproxy.api}</code>. Start it, then press Sync.
+          <span>
+            Toxiproxy is not reachable at <code>{env.toxiproxy.api}</code>. Start it, then press Sync. If its address
+            changed (e.g. the Podman VM's, after a reboot), edit it under Settings below.
+          </span>
         </div>
       )}
+
+      <section className="panel">
+        <h2>Settings</h2>
+        {edit.form ? (
+          <div className="form">
+            <Field label="Environment name" hint="Leave empty for the default, local.">
+              <TextInput value={edit.form.name} placeholder="local" onChange={(name) => edit.update({ name })} />
+            </Field>
+            <Field label="Toxiproxy API" hint="Leave empty for the default. Remember to update dependency addresses too if the host changed.">
+              <TextInput value={edit.form.toxiproxyApi} placeholder="http://localhost:8474" onChange={(toxiproxyApi) => edit.update({ toxiproxyApi })} />
+            </Field>
+          </div>
+        ) : (
+          <dl className="facts">
+            <dt>Environment name</dt><dd>{env.name}</dd>
+            <dt>Toxiproxy API</dt><dd><code>{env.toxiproxy.api}</code> <StatusLabel status={env.toxiproxy.status} /></dd>
+          </dl>
+        )}
+        <EditFooter f={edit} />
+      </section>
 
       <div className="stats">
         <Stat label="Services" value={services.length} />

@@ -48,6 +48,7 @@ type App struct {
 	store      *store.Store
 	log        *slog.Logger
 	kick       chan struct{}
+	editMu     sync.Mutex // one config edit at a time, so each one's hash check holds
 
 	mu       sync.RWMutex
 	tp       *toxiproxy.Client
