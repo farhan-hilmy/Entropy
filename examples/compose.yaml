@@ -1,0 +1,12 @@
+# Minimal stack for trying Entropy: Redis reachable only through Toxiproxy.
+#   podman compose -f examples/compose.yaml up -d     (or docker compose)
+# Entropy creates the "redis" proxy itself on startup.
+services:
+  redis:
+    image: docker.io/library/redis:7.2
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    ports:
+      - "8474:8474" # Toxiproxy API
+      - "6379:6379" # redis proxy

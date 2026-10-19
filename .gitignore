@@ -1,8 +1,6 @@
-node_modules/
-build/
-dist/
-coverage/
-.DS_Store
-*.log
-.env*
-!.env.example
+/.entropy/
+/entropy.exe
+/entropy
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
