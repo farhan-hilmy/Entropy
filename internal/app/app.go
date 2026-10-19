@@ -201,9 +201,12 @@ func (a *App) checkAll(ctx context.Context) {
 	}
 
 	tpStatus := Status{State: Reachable, CheckedAt: time.Now().UTC()}
-	proxies, tpErr := a.client().Proxies(ctx)
+	tp := a.client()
+	proxies, tpErr := tp.Proxies(ctx)
 	if tpErr != nil {
 		tpStatus = Status{State: Unreachable, Detail: tpErr.Error(), CheckedAt: time.Now().UTC()}
+	} else {
+		proxies = a.restoreProxies(ctx, tp, deps, proxies)
 	}
 
 	var mu sync.Mutex
@@ -243,6 +246,29 @@ func (a *App) checkAll(ctx context.Context) {
 	a.deps = depStatus
 	a.services = svcStatus
 	a.mu.Unlock()
+}
+
+// restoreProxies creates the proxies of declared dependencies that Toxiproxy
+// lacks, as happens whenever its container restarts: it keeps proxies in
+// memory only. Existing proxies are never changed here, only on Sync, so a
+// check round can't interfere with a proxy that has a fault on it.
+func (a *App) restoreProxies(ctx context.Context, tp *toxiproxy.Client, deps []store.Dependency, proxies map[string]toxiproxy.Proxy) map[string]toxiproxy.Proxy {
+	if proxies == nil {
+		proxies = map[string]toxiproxy.Proxy{}
+	}
+	for _, d := range deps {
+		if _, ok := proxies[d.Name]; ok || d.Missing {
+			continue
+		}
+		p := toxiproxy.Proxy{Name: d.Name, Listen: d.Listen, Upstream: d.Upstream, Enabled: true}
+		if err := tp.CreateProxy(ctx, p); err != nil {
+			a.log.Warn("could not recreate missing proxy", "dependency", d.Name, "err", err)
+			continue
+		}
+		a.log.Info("recreated missing proxy; Toxiproxy was probably restarted", "dependency", d.Name)
+		proxies[d.Name] = p
+	}
+	return proxies
 }
 
 func checkDependency(ctx context.Context, d store.Dependency, proxies map[string]toxiproxy.Proxy, tpErr error) Status {
