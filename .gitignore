@@ -1,4 +1,6 @@
 /.entropy/
+# Your own config; entropy.example.yaml is the template.
+/entropy.yaml
 /entropy.exe
 /entropy
 web/node_modules/

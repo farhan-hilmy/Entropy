@@ -1,0 +1,32 @@
+# Entropy config template. Copy it to entropy.yaml (which git ignores) and
+# fill in your own values:
+#   cp entropy.example.yaml entropy.yaml
+# This demo matches examples/compose.yaml (Redis behind Toxiproxy).
+
+environment:
+  name: local
+
+# Podman on Windows usually publishes container ports on the VM's address
+# (e.g. 172.28.142.159), not localhost: see README step 3.
+toxiproxy:
+  api: http://localhost:8474
+
+dependencies:
+  - name: redis
+    kind: redis
+    address: localhost:6379   # services connect here (through the proxy)
+    upstream: redis:6379      # the real Redis, as Toxiproxy sees it
+
+services:
+  # Replace with your own service. Until something answers on this URL it shows as Unreachable.
+  - name: oauth
+    baseUrl: http://localhost:8000
+    healthCheck: /health
+    uses: [redis]
+    # Commands you can run from the service's page (or `entropy run oauth/<name>`).
+    # Exit code 0 = success. Uncomment and fill in your own Bruno collection:
+    # commands:
+    #   - name: access-token
+    #     run: 'bru run "path/to/request.yml" --env "your environment"'
+    #     cwd: D:/path/to/bruno-collection   # default: this file's folder
+    #     timeoutSec: 30                     # default 30, max 600

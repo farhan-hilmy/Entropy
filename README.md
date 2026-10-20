@@ -36,7 +36,17 @@ The demo runs Redis behind Toxiproxy and registers it in Entropy.
 podman compose -f examples/compose.yaml up -d
 ```
 
-**Step 2 – check where Podman publishes ports**
+**Step 2 – create your config**
+
+```sh
+cp entropy.example.yaml entropy.yaml
+```
+
+`entropy.yaml` is yours: git ignores it, so your addresses and paths stay on
+your machine. Change `entropy.example.yaml` only to update the template for
+everyone.
+
+**Step 3 – check where Podman publishes ports**
 
 On Windows, Podman usually publishes container ports on the Podman VM's
 address, not on `localhost`. Check which one answers:
@@ -46,10 +56,11 @@ curl http://localhost:8474/version
 curl http://172.28.142.159:8474/version   # replace with your Podman VM address
 ```
 
-Whichever prints `{"version": ...}` is your **container host**. Put it in
-`entropy.yaml`, in both `toxiproxy.api` and the dependency's `address`.
+Whichever prints `{"version": ...}` is your **container host**. If it isn't
+`localhost`, put it in your `entropy.yaml`, in both `toxiproxy.api` and the
+dependency's `address`.
 
-**Step 3 – build the UI** (only needed once, and after UI changes)
+**Step 4 – build the UI** (only needed once, and after UI changes)
 
 ```sh
 cd web
@@ -58,7 +69,7 @@ npm run build
 cd ..
 ```
 
-**Step 4 – start Entropy**
+**Step 5 – start Entropy**
 
 ```sh
 go run ./cmd/entropy up
@@ -72,7 +83,7 @@ msg="cleared leftover faults"
 msg="Entropy is running" url=http://127.0.0.1:7400
 ```
 
-**Step 5 – open http://127.0.0.1:7400**
+**Step 6 – open http://127.0.0.1:7400**
 
 Redis should show **Reachable**. The demo service `oauth` shows
 **Unreachable** until something answers on `http://localhost:8000/health`.
@@ -273,8 +284,8 @@ because Toxiproxy faults never expire on their own.
 | Problem | Fix |
 |---|---|
 | `cannot listen on 127.0.0.1:7400` | Another program has the port. Use `go run ./cmd/entropy up -addr 127.0.0.1:7500`. |
-| Banner: *Toxiproxy is not reachable* | Start the containers (`podman compose … up -d`), check `toxiproxy.api` uses your container host (step 2), press Sync. |
-| Everything Unreachable after a reboot | The Podman VM address may have changed. Repeat step 2, then update the Toxiproxy address (Environment → Settings) and each dependency's address. |
+| Banner: *Toxiproxy is not reachable* | Start the containers (`podman compose … up -d`), check `toxiproxy.api` uses your container host (step 3), press Sync. |
+| Everything Unreachable after a reboot | The Podman VM address may have changed. Repeat step 3, then update the Toxiproxy address (Environment → Settings) and each dependency's address. |
 | Dependency Unreachable: *no reply to PING* (or similar) | Toxiproxy is up but the real dependency isn't. Check the container and `upstream`. |
 | Dependency Unreachable: *no proxy in Toxiproxy* | Entropy recreates missing proxies within about 5 s. If it persists, Entropy's log says why (e.g. the port is in use). |
 | New dependency stays Unreachable | Its port isn't published on the Toxiproxy container. Add it under `ports:` in the compose file and restart the container. |
