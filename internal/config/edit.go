@@ -79,13 +79,32 @@ type ServiceFields struct {
 	Uses           []string `json:"uses"`
 }
 
-// Edit replaces the editable fields of one part of the config: set exactly
-// one of its fields. Empty optional fields are removed from the file, so
-// their defaults apply.
+type NewDependency struct {
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Address  string `json:"address"`
+	Upstream string `json:"upstream"`
+	Listen   string `json:"listen"`
+}
+
+// NewService has no commands or health command: commands are added in the file.
+type NewService struct {
+	Name        string   `json:"name"`
+	BaseURL     string   `json:"baseUrl"`
+	HealthCheck string   `json:"healthCheck"`
+	Uses        []string `json:"uses"`
+}
+
+// Edit changes one part of the config: set exactly one of its fields.
+// Environment, Dependency and Service replace the editable fields of an
+// existing part; AddDependency and AddService append a new one. Empty
+// optional fields are left out of the file, so their defaults apply.
 type Edit struct {
-	Environment *EnvironmentFields `json:"environment,omitempty"`
-	Dependency  *DependencyFields  `json:"dependency,omitempty"`
-	Service     *ServiceFields     `json:"service,omitempty"`
+	Environment   *EnvironmentFields `json:"environment,omitempty"`
+	Dependency    *DependencyFields  `json:"dependency,omitempty"`
+	Service       *ServiceFields     `json:"service,omitempty"`
+	AddDependency *NewDependency     `json:"addDependency,omitempty"`
+	AddService    *NewService        `json:"addService,omitempty"`
 }
 
 // Apply writes e to the config file at path, provided its content still
@@ -132,15 +151,40 @@ func Apply(path, hash string, e Edit) (string, error) {
 // apply sets the fields both on cfg, the expected result, and in the file's text.
 func (e Edit) apply(cfg *Config, doc *yaml.Node, ed *editor) error {
 	set := 0
-	for _, part := range []bool{e.Environment != nil, e.Dependency != nil, e.Service != nil} {
+	for _, part := range []bool{e.Environment != nil, e.Dependency != nil, e.Service != nil, e.AddDependency != nil, e.AddService != nil} {
 		if part {
 			set++
 		}
 	}
 	if set != 1 {
-		return errors.New("an edit sets exactly one of environment, dependency or service")
+		return errors.New("an edit sets exactly one of environment, dependency, service, addDependency or addService")
 	}
 	switch {
+	case e.AddDependency != nil:
+		f := e.AddDependency
+		cfg.Dependencies = append(cfg.Dependencies, Dependency{Name: f.Name, Kind: f.Kind, Address: f.Address, Upstream: f.Upstream, Listen: f.Listen})
+		return ed.appendItem(doc, "dependencies", []field{
+			{"name", required(f.Name)},
+			{"kind", required(f.Kind)},
+			{"address", required(f.Address)},
+			{"upstream", required(f.Upstream)},
+			{"listen", optional(f.Listen)},
+		})
+
+	case e.AddService != nil:
+		f := e.AddService
+		s := Service{Name: f.Name, BaseURL: f.BaseURL, HealthCheck: f.HealthCheck}
+		if len(f.Uses) > 0 {
+			s.Uses = slices.Clone(f.Uses)
+		}
+		cfg.Services = append(cfg.Services, s)
+		return ed.appendItem(doc, "services", []field{
+			{"name", required(f.Name)},
+			{"baseUrl", required(f.BaseURL)},
+			{"uses", list(f.Uses)},
+			{"healthCheck", optional(f.HealthCheck)},
+		})
+
 	case e.Environment != nil:
 		f := e.Environment
 		cfg.Environment.Name = f.Name
@@ -316,6 +360,58 @@ func (ed *editor) setIn(doc *yaml.Node, section, key, text string) error {
 		return nil
 	}
 	return errUnsafe
+}
+
+type field struct{ key, text string } // text "" leaves the key out
+
+// appendItem adds a mapping with fields to the end of the doc's list
+// section, indented like the entries already there.
+func (ed *editor) appendItem(doc *yaml.Node, section string, fields []field) error {
+	var kept []field
+	for _, f := range fields {
+		if strings.ContainsAny(f.text, "\r\n") {
+			return fmt.Errorf("%s can't contain a line break", f.key)
+		}
+		if f.text != "" {
+			kept = append(kept, f)
+		}
+	}
+	// item renders the entry with its dash at column dash, keys at column keys.
+	item := func(dash, keys int) []string {
+		lines := make([]string, len(kept))
+		for i, f := range kept {
+			prefix := strings.Repeat(" ", keys)
+			if i == 0 {
+				prefix = strings.Repeat(" ", dash) + "-" + strings.Repeat(" ", keys-dash-1)
+			}
+			lines[i] = prefix + f.key + ": " + f.text
+		}
+		return lines
+	}
+
+	k, seq := lookup(doc, section)
+	switch {
+	case seq == nil:
+		last := len(ed.lines)
+		if ed.lines[last-1] == "" { // the file ends with a line break
+			last--
+		}
+		ed.replace(last+1, last, append([]string{"", section + ":"}, item(2, 4)...)...)
+	case seq.Kind == yaml.SequenceNode && seq.Style&yaml.FlowStyle == 0 && len(seq.Content) > 0:
+		first := seq.Content[0]
+		if first.Kind != yaml.MappingNode {
+			return errUnsafe
+		}
+		ed.replace(lastLine(seq)+1, lastLine(seq), item(seq.Column-1, first.Column-1)...)
+	case seq.Line == k.Line && (seq.Tag == "!!null" || seq.Kind == yaml.SequenceNode && len(seq.Content) == 0):
+		// "section:" or "section: []" on one line.
+		indent := strings.Repeat(" ", k.Column-1)
+		lines := item(k.Column-1+2, k.Column-1+4)
+		ed.replace(k.Line, k.Line, append([]string{indent + section + ":"}, lines...)...)
+	default:
+		return errUnsafe
+	}
+	return nil
 }
 
 // set sets key in the block mapping m to text, or removes the key when text is "".

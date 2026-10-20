@@ -7,7 +7,7 @@ import { api, type ConfigEdit, type RawConfig, type SyncResult } from './api'
 export function useConfigForm<T>(
   pick: (c: RawConfig) => T | undefined,
   toEdit: (form: T) => ConfigEdit,
-  onSaved: () => void,
+  onSaved: (form: T) => void,
 ) {
   const [form, setForm] = useState<T | null>(null)
   const [config, setConfig] = useState<RawConfig | null>(null)
@@ -42,7 +42,7 @@ export function useConfigForm<T>(
       const res = await api.editConfig(hash, toEdit(form))
       setForm(null)
       setSaved(res.sync)
-      onSaved()
+      onSaved(form)
     } catch (e) {
       setError(message(e))
     } finally {
@@ -85,6 +85,20 @@ export function EditFooter<T>({ f }: { f: ConfigForm<T> }) {
           <button className="link" onClick={f.open} disabled={f.busy}>{f.busy ? 'Loading…' : 'Edit'}</button>
         </span>
       )}
+    </>
+  )
+}
+
+// SaveButtons is the Save/Cancel row for a form opened some other way than EditFooter.
+export function SaveButtons<T>({ f, label = 'Save' }: { f: ConfigForm<T>; label?: string }) {
+  return (
+    <>
+      {f.error && <div className="banner error"><pre>{f.error}</pre></div>}
+      <div className="edit-actions">
+        <button className="btn primary" onClick={f.save} disabled={f.busy}>{f.busy ? 'Saving…' : label}</button>
+        <button className="btn" onClick={f.cancel} disabled={f.busy}>Cancel</button>
+        <span className="hint">Saves to the config file and syncs.</span>
+      </div>
     </>
   )
 }

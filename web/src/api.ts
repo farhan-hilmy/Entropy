@@ -118,11 +118,20 @@ export interface ServiceFields {
   uses: string[]
 }
 
+export interface NewDependency { name: string; kind: string; address: string; upstream: string; listen: string }
+// Commands are added in the config file, so a new service has none.
+export interface NewService { name: string; baseUrl: string; healthCheck: string; uses: string[] }
+
+// Mirrors config.Kinds in the Go backend.
+export const dependencyKinds = ['redis', 'mongodb', 'postgres', 'rabbitmq', 'http', 'https']
+
 // Exactly one part per edit. Empty optional fields are removed from the file.
 export type ConfigEdit =
   | { environment: EnvironmentFields }
   | { dependency: DependencyFields }
   | { service: ServiceFields }
+  | { addDependency: NewDependency }
+  | { addService: NewService }
 
 export interface EditResult {
   hash: string

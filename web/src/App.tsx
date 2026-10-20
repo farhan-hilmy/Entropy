@@ -50,11 +50,11 @@ export default function App() {
     if (route[0] === 'dependencies' && route[1]) {
       page = <DependencyDetail env={env} name={decodeURIComponent(route[1])} onChanged={refresh} />
     } else if (route[0] === 'dependencies') {
-      page = <DependenciesList env={env} />
+      page = <DependenciesList env={env} onChanged={refresh} />
     } else if (route[0] === 'services' && route[1]) {
       page = <ServiceDetail env={env} name={decodeURIComponent(route[1])} onChanged={refresh} />
     } else if (route[0] === 'services') {
-      page = <ServicesList env={env} />
+      page = <ServicesList env={env} onChanged={refresh} />
     } else {
       page = <Overview env={env} onSynced={refresh} />
     }

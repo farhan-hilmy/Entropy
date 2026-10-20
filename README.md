@@ -85,7 +85,18 @@ Stop Entropy with `Ctrl+C`. It clears all faults on exit.
 ## 3. Register your own dependencies and services
 
 Everything Entropy knows about your environment comes from `entropy.yaml`.
-The UI shows those fields but doesn't edit them.
+You can edit the file, or use the UI:
+
+- **Add** a dependency or service with **+ Add** on the Dependencies or
+  Services page.
+- **Edit** one with **Edit** on its page, or edit the environment name and
+  Toxiproxy address under **Settings** on the Environment page.
+
+The UI writes to `entropy.yaml` and syncs. It changes only the values you
+edited, so your comments and layout stay. It refuses to save if the file
+changed since you opened the form, or if the result would be invalid.
+**Commands can only be added or changed in the file**, because Entropy runs
+them on your machine. Removing something is also done in the file.
 
 ### Add a dependency
 
@@ -114,8 +125,8 @@ You need three things for each dependency:
        upstream: mongodb:27017        # the real MongoDB, as Toxiproxy sees it
    ```
 
-   Entropy creates the proxy itself when it syncs. You don't need to
-   create it in Toxiproxy by hand.
+   Entropy creates the proxy itself when it syncs, and recreates it if
+   Toxiproxy restarts. You don't need to create it in Toxiproxy by hand.
 
 3. **Your service pointed at the proxy.** Change your service's connection
    setting (e.g. `MONGO_URI`) to the `address` above, **not** the real
@@ -217,6 +228,8 @@ fault. For now you run them by hand.
 
 ### Apply your changes
 
+Changes saved from the UI are applied straight away. After editing the file:
+
 1. Check the file: `go run ./cmd/entropy validate`
 2. In the UI, press **⟳ Sync** on the Environment page (or restart Entropy).
 
@@ -261,9 +274,11 @@ because Toxiproxy faults never expire on their own.
 |---|---|
 | `cannot listen on 127.0.0.1:7400` | Another program has the port. Use `go run ./cmd/entropy up -addr 127.0.0.1:7500`. |
 | Banner: *Toxiproxy is not reachable* | Start the containers (`podman compose … up -d`), check `toxiproxy.api` uses your container host (step 2), press Sync. |
-| Everything Unreachable after a reboot | The Podman VM address may have changed. Repeat step 2 and update `entropy.yaml`. |
+| Everything Unreachable after a reboot | The Podman VM address may have changed. Repeat step 2, then update the Toxiproxy address (Environment → Settings) and each dependency's address. |
 | Dependency Unreachable: *no reply to PING* (or similar) | Toxiproxy is up but the real dependency isn't. Check the container and `upstream`. |
-| Dependency Unreachable: *no proxy in Toxiproxy* | Press Sync. If it persists, check the Sync result for a proxy warning. |
+| Dependency Unreachable: *no proxy in Toxiproxy* | Entropy recreates missing proxies within about 5 s. If it persists, Entropy's log says why (e.g. the port is in use). |
+| New dependency stays Unreachable | Its port isn't published on the Toxiproxy container. Add it under `ports:` in the compose file and restart the container. |
+| Save in the UI: *the config file changed since it was read* | The file was edited elsewhere meanwhile. Cancel, open Edit again, redo the change. |
 | *The UI is not built yet* | Run `npm install && npm run build` in `web/`, then restart Entropy. |
 | CIDM: *resolves to …, not 127.0.0.1* | The hosts-file line is missing or DNS is cached. Add it and run `ipconfig /flushdns`. |
 | Faults have no effect on my service | The service connects to the real dependency. Point it at the `address` in `entropy.yaml`. |
@@ -290,7 +305,7 @@ elsewhere: `go test -c -o .entropy/t.exe ./internal/config && .entropy/t.exe`.
 
 ```
 cmd/entropy/        CLI: up, validate, run
-internal/config/    load and validate entropy.yaml
+internal/config/    load and validate entropy.yaml; edit it in place for the UI
 internal/command/   run a command line with a timeout, kill its process tree
 internal/store/     SQLite: environment, dependencies, services; sync reconcile
 internal/toxiproxy/ minimal Toxiproxy API client
@@ -306,6 +321,8 @@ web/                React + TypeScript + Vite UI
 |---|---|---|
 | GET | `/api/environment` | Environment, dependencies, services and statuses |
 | POST | `/api/sync` | Re-read `entropy.yaml` (422 with errors if invalid) |
+| GET | `/api/config` | `entropy.yaml` as written (no defaults), plus a `hash` of its content |
+| PATCH | `/api/config` | Save one change and sync: `{hash, <part>}` with one of `environment`, `dependency`, `service`, `addDependency`, `addService`. 409 if the file changed since `hash`, 422 if the result is invalid |
 | POST | `/api/faults/stop-all` | Reset Toxiproxy |
 | POST | `/api/services/{service}/commands/{command}/run` | Run a command; answers when it finishes (409 if already running) |
 | GET | `/api/command-runs/{id}` | One recorded run with its full output |

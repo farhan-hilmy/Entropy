@@ -166,6 +166,76 @@ func TestApplyUnknownName(t *testing.T) {
 	}
 }
 
+func TestApplyAddsEntriesAtTheEndOfTheirList(t *testing.T) {
+	path, snap := snapshot(t, editFixture)
+	hash, err := Apply(path, snap.Hash, Edit{AddDependency: &NewDependency{
+		Name: "pg", Kind: "postgres", Address: "localhost:5432", Upstream: "postgres:5432",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(path, hash, Edit{AddService: &NewService{
+		Name: "billing", BaseURL: "http://127.0.0.1:8081", HealthCheck: "/health", Uses: []string{"pg"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := strings.Replace(editFixture, `    upstream: mongo:27017
+`, `    upstream: mongo:27017
+  - name: pg
+    kind: postgres
+    address: localhost:5432
+    upstream: postgres:5432
+`, 1) + `  - name: billing
+    baseUrl: http://127.0.0.1:8081
+    uses: [pg]
+    healthCheck: /health
+`
+	if got := fileContent(t, path); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestApplyAddsToEmptyOrMissingLists(t *testing.T) {
+	add := Edit{AddService: &NewService{Name: "api", BaseURL: "http://localhost:8080"}}
+	for _, c := range []struct{ name, before, after string }{
+		{"missing", "environment:\n  name: local\n", "environment:\n  name: local\n\nservices:\n  - name: api\n    baseUrl: http://localhost:8080\n"},
+		{"empty flow", "services: []\n", "services:\n  - name: api\n    baseUrl: http://localhost:8080\n"},
+		{"null", "services:\n", "services:\n  - name: api\n    baseUrl: http://localhost:8080\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path, snap := snapshot(t, c.before)
+			if _, err := Apply(path, snap.Hash, add); err != nil {
+				t.Fatal(err)
+			}
+			if got := fileContent(t, path); got != c.after {
+				t.Errorf("got:\n%q\nwant:\n%q", got, c.after)
+			}
+		})
+	}
+}
+
+func TestApplyRefusesBadNewEntries(t *testing.T) {
+	for _, c := range []struct {
+		edit Edit
+		want string
+	}{
+		{Edit{AddDependency: &NewDependency{Name: "redis", Kind: "redis", Address: "localhost:6380", Upstream: "r:6379"}}, `dependency "redis" is declared twice`},
+		{Edit{AddDependency: &NewDependency{Name: "q", Kind: "kafka", Address: "localhost:9092", Upstream: "k:9092"}}, `kind "kafka" is not one of`},
+		{Edit{AddService: &NewService{Name: "bad name", BaseURL: "http://x"}}, "name may only contain"},
+		{Edit{AddService: &NewService{Name: "x", BaseURL: "http://x", Uses: []string{"nope"}}}, `uses "nope": no such dependency`},
+	} {
+		path, snap := snapshot(t, editFixture)
+		_, err := Apply(path, snap.Hash, c.edit)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("err = %v, want it to contain %q", err, c.want)
+		}
+		if fileContent(t, path) != editFixture {
+			t.Error("a refused edit must leave the file unchanged")
+		}
+	}
+}
+
 func TestApplyNeedsExactlyOnePart(t *testing.T) {
 	path, snap := snapshot(t, editFixture)
 	for _, e := range []Edit{
