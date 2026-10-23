@@ -34,6 +34,32 @@ export interface Dependency {
   ready: boolean
   notReadyReason?: string
   usedBy: string[]
+  fault?: Fault
+}
+
+// Mirrors internal/faults: Types, Spec and Fault.
+export const faultTypes = ['latency', 'drop', 'timeout', 'outage', 'flap'] as const
+export type FaultType = (typeof faultTypes)[number]
+export const maxFaultDurationSec = 3600
+
+// Fields that don't apply to the type must be left out.
+export interface FaultSpec {
+  type: FaultType
+  durationSec: number
+  latencyMs?: number
+  jitterMs?: number
+  timeoutMs?: number
+  downSec?: number
+  upSec?: number
+}
+
+export interface Fault extends FaultSpec {
+  dependency: string
+  startedAt: string
+  endsAt: string
+  // removing: its time is up or it was stopped; error is why the last removal attempt failed.
+  removing: boolean
+  error?: string
 }
 
 export interface CommandRun {
@@ -178,6 +204,22 @@ export const api = {
     })
     if (!res.ok) throw await errorFrom(res)
     return res.json()
+  },
+
+  // Fails with 409 if the dependency already has a fault, 422 if the spec is invalid.
+  async startFault(dependency: string, spec: FaultSpec): Promise<Fault> {
+    const res = await fetch(`/api/dependencies/${encodeURIComponent(dependency)}/fault`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(spec),
+    })
+    if (!res.ok) throw await errorFrom(res)
+    return res.json()
+  },
+
+  async stopFault(dependency: string): Promise<void> {
+    const res = await fetch(`/api/dependencies/${encodeURIComponent(dependency)}/fault`, { method: 'DELETE' })
+    if (!res.ok) throw await errorFrom(res)
   },
 
   async stopAllFaults(): Promise<void> {

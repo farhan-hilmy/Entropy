@@ -11,9 +11,10 @@ your service ──► Toxiproxy (proxy per dependency) ──► real dependenc
                   Entropy  (checks status, injects and clears faults)
 ```
 
-> **Current status:** environment setup only (MVP build step 1). You can
-> register dependencies and services, see live statuses and stop all faults.
-> Experiments and runs are not built yet.
+> **Current status:** environment setup and faults (MVP build steps 1–2). You
+> can register dependencies and services, see live statuses, apply a timed
+> fault to a dependency and stop all faults. Experiments and runs are not
+> built yet.
 
 ---
 
@@ -292,18 +293,44 @@ handshake…). It only shows statuses it can prove:
 | **Fault active** | A fault is injected: the proxy is disabled or has toxics. |
 | **Not checked yet** | Just added; the first check hasn't run. |
 
-**Experiment-ready** means the dependency is Reachable. If it isn't, the
-Dependency page says why.
+**Experiment-ready** means the dependency is Reachable and has no fault on
+it. If it isn't, the Dependency page says why.
 
-## 5. Stop all faults
+## 5. Apply a fault
 
-Press **Stop all faults** in the top bar, on any page. It enables every proxy
-and removes every toxic. Entropy also does this on startup and on exit,
-because Toxiproxy faults never expire on their own.
+On a dependency's page, the **Fault** panel applies one fault to its proxy
+for a fixed time (1 to 3600 seconds), then removes it:
+
+| Type | What your service sees | Options |
+|---|---|---|
+| `latency` | Every response is delayed | latency (default 1000 ms), jitter |
+| `drop` | Every connection is reset (TCP RST) | |
+| `timeout` | Nothing gets through; connections hang | close after N ms (default: hang until the fault ends) |
+| `outage` | The proxy is disabled: connections close and new ones are refused | |
+| `flap` | Outage and normal take turns, starting with an outage | down for / up for (default 5 s each) |
+
+- A dependency has at most one fault at a time. **Stop fault** ends it early.
+- Entropy removes the fault when its time is up, even if no page is open. If
+  that fails (e.g. Toxiproxy is unreachable), it keeps retrying until it
+  succeeds (after 2 s, then 4 s, 8 s… up to every 30 s), and the panel shows
+  the error.
+- If Toxiproxy restarts (or is reset from outside Entropy) during a fault,
+  Entropy puts the fault back within about 5 seconds, so it lasts its full
+  duration.
+- The fault only affects services that connect through the proxy.
+
+## 6. Stop all faults
+
+Press **Stop all faults** in the top bar, on any page. It ends every fault
+Entropy started, then enables every proxy and removes every toxic, including
+ones added outside Entropy. Entropy also does this on startup and on exit, so
+killing Entropy in the middle of a fault leaves nothing broken after the next
+start. If Toxiproxy isn't reachable at startup, Entropy does it as soon as
+Toxiproxy answers.
 
 ---
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 | Problem | Fix |
 |---|---|
@@ -313,7 +340,7 @@ because Toxiproxy faults never expire on their own.
 | Everything Unreachable after a reboot | With a fixed host, the Podman VM address may have changed: switch to `auto` (step 3), or update the Toxiproxy address (Environment → Settings) and each dependency's address. |
 | Dependency Unreachable: *no reply to PING* (or similar) | Toxiproxy is up but the real dependency isn't. Check the container and `upstream`. |
 | Dependency Unreachable: *no proxy in Toxiproxy* | Entropy recreates missing proxies within about 5 s. If it persists, Entropy's log says why (e.g. the port is in use). |
-| New dependency stays Unreachable | Its port isn't published on the Toxiproxy container. Add it under `ports:` in the compose file and restart the container. |
+| New dependency stays Unreachable (or *dial tcp …: i/o timeout*) | Its port isn't published on the Toxiproxy container. Add it under `ports:` in the compose file and recreate the container: `podman compose -f examples/compose.yaml up -d --force-recreate toxiproxy`. `podman start` keeps the old ports. |
 | Save in the UI: *the config file changed since it was read* | The file was edited elsewhere meanwhile. Cancel, open Edit again, redo the change. |
 | *The UI is not built yet* | Run `npm install && npm run build` in `web/`, then restart Entropy. |
 | CIDM: *resolves to …, not 127.0.0.1* | The hosts-file line is missing or DNS is cached. Add it and run `ipconfig /flushdns`. |
@@ -346,8 +373,9 @@ internal/command/   run a command line with a timeout, kill its process tree
 internal/store/     SQLite: environment, dependencies, services; sync reconcile
 internal/toxiproxy/ minimal Toxiproxy API client
 internal/containerhost/ find the container host for "auto" addresses
+internal/faults/    apply faults through Toxiproxy, remove them when their time is up
 internal/checks/    protocol-level checks through the proxy
-internal/app/       sync, status monitor, Stop all faults, view for the UI
+internal/app/       sync, status monitor, faults, view for the UI
 internal/server/    JSON API + embedded UI
 web/                React + TypeScript + Vite UI
 ```
@@ -360,7 +388,9 @@ web/                React + TypeScript + Vite UI
 | POST | `/api/sync` | Re-read `entropy.yaml` (422 with errors if invalid) |
 | GET | `/api/config` | `entropy.yaml` as written (no defaults), plus a `hash` of its content |
 | PATCH | `/api/config` | Save one change and sync: `{hash, <part>}` with one of `environment`, `dependency`, `service`, `addDependency`, `addService`. 409 if the file changed since `hash`, 422 if the result is invalid |
-| POST | `/api/faults/stop-all` | Reset Toxiproxy |
+| POST | `/api/dependencies/{name}/fault` | Apply a fault: `{type, durationSec, …options}` (see step 5: `latencyMs`, `jitterMs`, `timeoutMs`, `downSec`, `upSec`). 409 if it already has one, 422 if invalid |
+| DELETE | `/api/dependencies/{name}/fault` | Stop the dependency's fault now |
+| POST | `/api/faults/stop-all` | End every fault, then reset Toxiproxy |
 | POST | `/api/services/{service}/commands/{command}/run` | Run a command; answers when it finishes (409 if already running) |
 | GET | `/api/command-runs/{id}` | One recorded run with its full output |
 | POST | `/api/services/{service}/check` | Run the service's health command now |

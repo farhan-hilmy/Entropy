@@ -137,8 +137,8 @@ func up(args []string) error {
 	}
 
 	// Toxiproxy faults don't expire on their own, so never start with leftovers.
-	if err := a.StopAllFaults(ctx); err != nil {
-		log.Warn("could not clear leftover faults", "err", err)
+	if err := a.ClearLeftovers(ctx); err != nil {
+		log.Warn("could not clear leftover faults yet; Entropy does it once Toxiproxy answers", "err", err)
 	} else {
 		log.Info("cleared leftover faults")
 	}

@@ -15,6 +15,7 @@ import (
 	"entropy/internal/checks"
 	"entropy/internal/config"
 	"entropy/internal/containerhost"
+	"entropy/internal/faults"
 	"entropy/internal/store"
 	"entropy/internal/toxiproxy"
 )
@@ -54,6 +55,7 @@ type App struct {
 	log        *slog.Logger
 	kick       chan struct{}
 	editMu     sync.Mutex // one config edit at a time, so each one's hash check holds
+	faults     *faults.Engine
 
 	mu       sync.RWMutex
 	tp       *toxiproxy.Client
@@ -69,10 +71,13 @@ type App struct {
 	autoPort   string
 	host       *containerhost.Candidate // the detected container host; nil if none answered
 	lastDetect time.Time
+	// leftoversPending: clearing leftover faults at startup failed, so the
+	// first check round that reaches Toxiproxy does it.
+	leftoversPending bool
 }
 
 func New(configPath string, st *store.Store, log *slog.Logger) *App {
-	return &App{
+	a := &App{
 		configPath: configPath,
 		store:      st,
 		log:        log,
@@ -84,6 +89,9 @@ func New(configPath string, st *store.Store, log *slog.Logger) *App {
 		running:    map[string]bool{},
 		cmdHealth:  map[string]Status{},
 	}
+	a.faults = faults.New(a.client, log)
+	a.faults.OnRemoved = func(string) { a.CheckSoon() }
+	return a
 }
 
 // Sync reloads the config file, reconciles it into the store and makes sure
@@ -214,13 +222,6 @@ func sameListen(a, b string) bool {
 	return errA == nil && errB == nil && ap == bp && wildcard(ah) && wildcard(bh)
 }
 
-// StopAllFaults enables every proxy and removes every toxic.
-func (a *App) StopAllFaults(ctx context.Context) error {
-	err := a.client().Reset(ctx)
-	a.CheckSoon()
-	return err
-}
-
 func (a *App) client() *toxiproxy.Client {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -265,10 +266,14 @@ func (a *App) checkAll(ctx context.Context) {
 	tpStatus := Status{State: Reachable, CheckedAt: time.Now().UTC()}
 	tp := a.client()
 	proxies, tpErr := tp.Proxies(ctx)
+	if tpErr == nil && a.clearPendingLeftovers(ctx, tp) {
+		proxies, tpErr = tp.Proxies(ctx) // the rest of the round sees the cleared state
+	}
 	if tpErr != nil {
 		tpStatus = Status{State: Unreachable, Detail: tpErr.Error(), CheckedAt: time.Now().UTC()}
 	} else {
 		proxies = a.restoreProxies(ctx, tp, deps, proxies)
+		a.faults.Reapply(ctx, proxies)
 	}
 	a.redetect(ctx, tpErr != nil)
 
@@ -314,7 +319,8 @@ func (a *App) checkAll(ctx context.Context) {
 // restoreProxies creates the proxies of declared dependencies that Toxiproxy
 // lacks, as happens whenever its container restarts: it keeps proxies in
 // memory only. Existing proxies are never changed here, only on Sync, so a
-// check round can't interfere with a proxy that has a fault on it.
+// check round can't interfere with a proxy that has a fault on it. Faults
+// that were on a recreated proxy are put back by faults.Engine.Reapply.
 func (a *App) restoreProxies(ctx context.Context, tp *toxiproxy.Client, deps []store.Dependency, proxies map[string]toxiproxy.Proxy) map[string]toxiproxy.Proxy {
 	if proxies == nil {
 		proxies = map[string]toxiproxy.Proxy{}
@@ -385,6 +391,8 @@ type DependencyView struct {
 	Ready          bool     `json:"ready"`
 	NotReadyReason string   `json:"notReadyReason,omitempty"`
 	UsedBy         []string `json:"usedBy"`
+	// Fault is the fault Entropy applied to this dependency, until it's removed.
+	Fault *faults.Fault `json:"fault,omitempty"`
 }
 
 type ServiceView struct {
@@ -450,11 +458,18 @@ func (a *App) View(ctx context.Context) (View, error) {
 		}
 		v.Services = append(v.Services, ServiceView{Service: s, Status: st, Checking: checking, Commands: commandViews(s, running, recent)})
 	}
+	active := a.faults.Active()
 	for _, d := range deps {
 		st := statusOr(depStatus, d.Name)
 		dv := DependencyView{Dependency: d, Status: st, UsedBy: usedBy[d.Name]}
 		if dv.UsedBy == nil {
 			dv.UsedBy = []string{}
+		}
+		if f, ok := active[d.Name]; ok {
+			dv.Fault = &f
+			// Shown at once, not after the next check round, and also while a flap has the proxy up.
+			st = faultStatus(f, st)
+			dv.Status = st
 		}
 		dv.Ready, dv.NotReadyReason = readiness(d, st)
 		if !d.Missing {
@@ -469,6 +484,17 @@ func (a *App) View(ctx context.Context) (View, error) {
 	return v, nil
 }
 
+func faultStatus(f faults.Fault, checked Status) Status {
+	detail := f.Type + " fault from Entropy"
+	if f.Removing {
+		detail = f.Type + " fault ended; removing it"
+		if f.Error != "" {
+			detail += " (last try: " + f.Error + ")"
+		}
+	}
+	return Status{State: FaultActive, Detail: detail, CheckedAt: checked.CheckedAt}
+}
+
 func statusOr(m map[string]Status, name string) Status {
 	if st, ok := m[name]; ok {
 		return st
@@ -476,8 +502,8 @@ func statusOr(m map[string]Status, name string) Status {
 	return Status{State: NotChecked}
 }
 
-// readiness: the check through the proxy passes and no experiment is running
-// on the dependency. Experiments don't exist yet, so only the first part applies.
+// readiness: the check through the proxy passes and nothing else is using the
+// dependency. Until experiments exist, that means no fault is on it.
 func readiness(d store.Dependency, st Status) (bool, string) {
 	if d.Missing {
 		return false, "Removed from the config file"

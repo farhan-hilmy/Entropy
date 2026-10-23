@@ -2,6 +2,7 @@ import type { DependencyFields, Environment } from '../api'
 import { EditFooter, Field, TextInput, useConfigForm, type ConfigForm } from '../editing'
 import { navigate } from '../route'
 import { StatusLabel, timeAgo } from '../ui'
+import { FaultPanel } from './FaultPanel'
 
 export function DependencyDetail({ env, name, onChanged }: { env: Environment; name: string; onChanged: () => void }) {
   const edit = useConfigForm<DependencyFields>(
@@ -51,6 +52,8 @@ export function DependencyDetail({ env, name, onChanged }: { env: Environment; n
         )}
         {!d.missing && <EditFooter f={edit} />}
       </section>
+
+      {!d.missing && <FaultPanel d={d} onChanged={onChanged} />}
 
       <section className="panel">
         <h2>Used by services</h2>

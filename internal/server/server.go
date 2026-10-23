@@ -10,6 +10,7 @@ import (
 
 	"entropy/internal/app"
 	"entropy/internal/config"
+	"entropy/internal/faults"
 )
 
 func New(a *app.App, ui fs.FS) http.Handler {
@@ -64,6 +65,31 @@ func New(a *app.App, ui fs.FS) http.Handler {
 		writeJSON(w, http.StatusOK, res)
 	})
 
+	// Applies a fault (faults.Spec) to the dependency; it's removed after durationSec.
+	mux.HandleFunc("POST /api/dependencies/{name}/fault", func(w http.ResponseWriter, r *http.Request) {
+		var spec faults.Spec
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&spec); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		f, err := a.StartFault(r.Context(), r.PathValue("name"), spec)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, f)
+	})
+
+	mux.HandleFunc("DELETE /api/dependencies/{name}/fault", func(w http.ResponseWriter, r *http.Request) {
+		if err := a.StopFault(r.PathValue("name")); err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+
 	mux.HandleFunc("POST /api/faults/stop-all", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.StopAllFaults(r.Context()); err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
@@ -111,9 +137,9 @@ func writeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, app.ErrNotFound), errors.Is(err, config.ErrNotFound):
 		status = http.StatusNotFound
-	case errors.Is(err, app.ErrAlreadyRunning), errors.Is(err, config.ErrConflict):
+	case errors.Is(err, app.ErrAlreadyRunning), errors.Is(err, config.ErrConflict), errors.Is(err, faults.ErrBusy):
 		status = http.StatusConflict
-	case errors.As(err, &invalid):
+	case errors.As(err, &invalid), errors.Is(err, faults.ErrInvalid):
 		status = http.StatusUnprocessableEntity
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
