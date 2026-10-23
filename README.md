@@ -36,6 +36,18 @@ The demo runs Redis behind Toxiproxy and registers it in Entropy.
 podman compose -f examples/compose.yaml up -d
 ```
 
+or 
+
+```sh
+podman start examples-redis-1 examples-toxiproxy-1
+```
+
+if the containers already exists. Or if you make changes in compose, use this command:
+
+```sh
+podman compose -f examples/compose.yaml up -d --force-recreate toxiproxy
+```
+
 **Step 2 – create your config**
 
 ```sh
@@ -46,19 +58,30 @@ cp entropy.example.yaml entropy.yaml
 your machine. Change `entropy.example.yaml` only to update the template for
 everyone.
 
-**Step 3 – check where Podman publishes ports**
+**Step 3 – the container host (usually nothing to do)**
 
-On Windows, Podman usually publishes container ports on the Podman VM's
-address, not on `localhost`. Check which one answers:
+Container ports are published on the **container host**: `localhost` with
+Docker Desktop and most setups, but on Windows Podman usually publishes on
+the Podman VM's address (e.g. `172.28.142.159`). The template uses `auto`
+for it:
 
-```sh
-curl http://localhost:8474/version
-curl http://172.28.142.159:8474/version   # replace with your Podman VM address
+```yaml
+toxiproxy:
+  api: http://auto:8474
+dependencies:
+  - name: redis
+    address: auto:6379
 ```
 
-Whichever prints `{"version": ...}` is your **container host**. If it isn't
-`localhost`, put it in your `entropy.yaml`, in both `toxiproxy.api` and the
-dependency's `address`.
+On every sync Entropy asks each likely host for Toxiproxy's version and uses
+the first that answers: `localhost`, the host in `DOCKER_HOST` or
+`CONTAINER_HOST` (tcp:// or ssh://), then on Windows the WSL VM's address.
+It only asks WSL distributions that are already running, so it never starts
+your Podman machine. The Environment page shows the host it found, and
+Entropy's log says `container host detected host=… via=…`.
+
+If Toxiproxy runs somewhere else, write that host instead of `auto`, e.g.
+`api: http://10.0.0.5:8474`. A dependency's `auto` then means the API's host.
 
 **Step 4 – build the UI** (only needed once, and after UI changes)
 
@@ -132,7 +155,7 @@ You need three things for each dependency:
    dependencies:
      - name: mongodb                  # also the proxy's name in Toxiproxy
        kind: mongodb                  # redis | mongodb | postgres | rabbitmq | http | https
-       address: 172.28.142.159:27017  # where your service connects: the proxy
+       address: auto:27017            # where your service connects: the proxy
        upstream: mongodb:27017        # the real MongoDB, as Toxiproxy sees it
    ```
 
@@ -141,7 +164,8 @@ You need three things for each dependency:
 
 3. **Your service pointed at the proxy.** Change your service's connection
    setting (e.g. `MONGO_URI`) to the `address` above, **not** the real
-   MongoDB. If the service connects directly, faults have no effect on it.
+   MongoDB. With `auto`, use the container host shown on the Environment
+   page. If the service connects directly, faults have no effect on it.
 
 ### Add a service
 
@@ -284,8 +308,9 @@ because Toxiproxy faults never expire on their own.
 | Problem | Fix |
 |---|---|
 | `cannot listen on 127.0.0.1:7400` | Another program has the port. Use `go run ./cmd/entropy up -addr 127.0.0.1:7500`. |
-| Banner: *Toxiproxy is not reachable* | Start the containers (`podman compose … up -d`), check `toxiproxy.api` uses your container host (step 3), press Sync. |
-| Everything Unreachable after a reboot | The Podman VM address may have changed. Repeat step 3, then update the Toxiproxy address (Environment → Settings) and each dependency's address. |
+| Banner: *Toxiproxy is not reachable* | Start the containers (`podman compose … up -d`). With `auto`, Entropy finds Toxiproxy again within about 15 s; with a fixed host, check it's your container host (step 3) and press Sync. |
+| Sync warning: *Toxiproxy didn't answer on port 8474 at any of: …* | The containers aren't running, or Toxiproxy is on a host Entropy doesn't know. Start them, or write the host instead of `auto`. |
+| Everything Unreachable after a reboot | With a fixed host, the Podman VM address may have changed: switch to `auto` (step 3), or update the Toxiproxy address (Environment → Settings) and each dependency's address. |
 | Dependency Unreachable: *no reply to PING* (or similar) | Toxiproxy is up but the real dependency isn't. Check the container and `upstream`. |
 | Dependency Unreachable: *no proxy in Toxiproxy* | Entropy recreates missing proxies within about 5 s. If it persists, Entropy's log says why (e.g. the port is in use). |
 | New dependency stays Unreachable | Its port isn't published on the Toxiproxy container. Add it under `ports:` in the compose file and restart the container. |
@@ -320,6 +345,7 @@ internal/config/    load and validate entropy.yaml; edit it in place for the UI
 internal/command/   run a command line with a timeout, kill its process tree
 internal/store/     SQLite: environment, dependencies, services; sync reconcile
 internal/toxiproxy/ minimal Toxiproxy API client
+internal/containerhost/ find the container host for "auto" addresses
 internal/checks/    protocol-level checks through the proxy
 internal/app/       sync, status monitor, Stop all faults, view for the UI
 internal/server/    JSON API + embedded UI

@@ -181,3 +181,74 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 		t.Fatalf("expected an unknown field error, got %v", err)
 	}
 }
+
+func TestSetContainerHost(t *testing.T) {
+	cfg, err := Load(write(t, `
+toxiproxy:
+  api: http://auto:8474
+dependencies:
+  - name: redis
+    kind: redis
+    address: auto:6379
+    upstream: redis:6379
+  - name: api
+    kind: http
+    address: 10.0.0.5:8080
+    upstream: api:8080
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port, ok := cfg.AutoAPIPort(); !ok || port != "8474" {
+		t.Fatalf("AutoAPIPort = %q, %v", port, ok)
+	}
+	cfg.SetContainerHost("172.28.142.159")
+	if cfg.Toxiproxy.API != "http://172.28.142.159:8474" {
+		t.Errorf("api = %q", cfg.Toxiproxy.API)
+	}
+	if got := cfg.Dependencies[0].Address; got != "172.28.142.159:6379" {
+		t.Errorf("auto address = %q", got)
+	}
+	if got := cfg.Dependencies[0].Listen; got != "0.0.0.0:6379" {
+		t.Errorf("listen = %q", got)
+	}
+	if got := cfg.Dependencies[1].Address; got != "10.0.0.5:8080" {
+		t.Errorf("explicit address changed to %q", got)
+	}
+}
+
+func TestAutoAddressWithExplicitAPI(t *testing.T) {
+	cfg, err := Load(write(t, `
+toxiproxy:
+  api: http://10.0.0.5:8474
+dependencies:
+  - name: redis
+    kind: redis
+    address: auto:6379
+    upstream: redis:6379
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.AutoAPIPort(); ok {
+		t.Fatal("explicit API reported as auto")
+	}
+	cfg.SetContainerHost(cfg.APIHost())
+	if got := cfg.Dependencies[0].Address; got != "10.0.0.5:6379" {
+		t.Errorf("address = %q, want the API's host", got)
+	}
+}
+
+func TestRedirectRejectsAutoAddress(t *testing.T) {
+	_, err := Load(write(t, `
+dependencies:
+  - name: cidm
+    kind: https
+    address: auto:443
+    upstream: cidm.example.com:443
+    redirect: true
+`))
+	if err == nil || !strings.Contains(err.Error(), "cidm: redirect needs the hostname in address") {
+		t.Fatalf("expected a redirect error, got %v", err)
+	}
+}

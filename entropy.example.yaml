@@ -6,15 +6,16 @@
 environment:
   name: local
 
-# Podman on Windows usually publishes container ports on the VM's address
-# (e.g. 172.28.142.159), not localhost: see README step 3.
+# "auto" makes Entropy find the container host on every sync: localhost, or
+# e.g. the Podman VM's address on Windows (see README step 3). Write a host
+# instead (http://localhost:8474) to use exactly that one.
 toxiproxy:
-  api: http://localhost:8474
+  api: http://auto:8474
 
 dependencies:
   - name: redis
     kind: redis
-    address: localhost:6379   # services connect here (through the proxy)
+    address: auto:6379        # services connect here (through the proxy); auto = the container host
     upstream: redis:6379      # the real Redis, as Toxiproxy sees it
 
 services:

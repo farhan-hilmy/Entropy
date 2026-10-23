@@ -79,7 +79,13 @@ export interface Environment {
   syncedAt?: string
   status: 'ready' | 'degraded' | 'unreachable' | 'checking'
   activeFaults: number
-  toxiproxy: { api: string; status: Status }
+  toxiproxy: {
+    api: string
+    status: Status
+    // auto: toxiproxy.api's host is "auto"; detected is the host found, absent while none answers.
+    auto: boolean
+    detected?: { host: string; source: string }
+  }
   lastSync: SyncResult
   dependencies: Dependency[]
   services: Service[]

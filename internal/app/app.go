@@ -14,11 +14,16 @@ import (
 
 	"entropy/internal/checks"
 	"entropy/internal/config"
+	"entropy/internal/containerhost"
 	"entropy/internal/store"
 	"entropy/internal/toxiproxy"
 )
 
 const CheckInterval = 5 * time.Second
+
+// RedetectInterval is how often, at most, an unreachable Toxiproxy at an
+// auto-detected host makes Entropy look for the container host again.
+const RedetectInterval = 15 * time.Second
 
 // State is a status Entropy can prove. There is deliberately no "degraded".
 type State string
@@ -60,6 +65,10 @@ type App struct {
 	// cmdHealth holds the last health-command result of services that have
 	// one. It's kept apart from services, which every check round replaces.
 	cmdHealth map[string]Status
+	// autoPort is toxiproxy.api's port when its host is auto, else "".
+	autoPort   string
+	host       *containerhost.Candidate // the detected container host; nil if none answered
+	lastDetect time.Time
 }
 
 func New(configPath string, st *store.Store, log *slog.Logger) *App {
@@ -93,6 +102,9 @@ func (a *App) Sync(ctx context.Context) SyncResult {
 		res.Error = err.Error()
 		return res
 	}
+	if w := a.resolveHost(ctx, cfg); w != "" {
+		res.Warnings = append(res.Warnings, w)
+	}
 	sum, err := a.store.Sync(ctx, cfg, a.configPath)
 	if err != nil {
 		res.Error = "saving to the database: " + err.Error()
@@ -104,13 +116,63 @@ func (a *App) Sync(ctx context.Context) SyncResult {
 	a.mu.Lock()
 	a.tp = tp
 	a.mu.Unlock()
-	res.Warnings = ensureProxies(ctx, tp, cfg.Dependencies)
+	res.Warnings = append(res.Warnings, ensureProxies(ctx, tp, cfg.Dependencies)...)
 
 	// Every sync refreshes health commands, so a config change shows a current result.
 	if svcs, err := a.store.Services(ctx); err == nil {
 		a.startHealthCommands(context.WithoutCancel(ctx), svcs, func(store.Service) bool { return true })
 	}
 	return res
+}
+
+// resolveHost replaces the auto host in cfg with the container host, detected
+// when toxiproxy.api is auto. When no host answers it falls back to localhost
+// and returns a warning; the check loop keeps looking (see redetect).
+func (a *App) resolveHost(ctx context.Context, cfg *config.Config) (warning string) {
+	port, auto := cfg.AutoAPIPort()
+	if !auto {
+		cfg.SetContainerHost(cfg.APIHost())
+		a.mu.Lock()
+		a.autoPort, a.host = "", nil
+		a.mu.Unlock()
+		return ""
+	}
+	var found *containerhost.Candidate
+	host := "localhost"
+	if c, err := containerhost.Find(ctx, port, containerhost.Candidates(ctx)); err != nil {
+		warning = err.Error() + ". Using localhost; Entropy keeps looking while Toxiproxy is unreachable."
+	} else {
+		found, host = &c, c.Host
+		a.log.Info("container host detected", "host", c.Host, "via", c.Source)
+	}
+	cfg.SetContainerHost(host)
+	a.mu.Lock()
+	a.autoPort, a.host, a.lastDetect = port, found, time.Now()
+	a.mu.Unlock()
+	return warning
+}
+
+// redetect syncs again when Toxiproxy, at an auto-detected host, is
+// unreachable or wasn't found on the last sync, and turns up at another host
+// or at all: the containers may have started after Entropy, or the Podman
+// VM's address changed.
+func (a *App) redetect(ctx context.Context, unreachable bool) {
+	a.mu.Lock()
+	due := a.autoPort != "" && (unreachable || a.host == nil) && time.Since(a.lastDetect) >= RedetectInterval
+	if due {
+		a.lastDetect = time.Now()
+	}
+	port, current := a.autoPort, a.host
+	a.mu.Unlock()
+	if !due {
+		return
+	}
+	c, err := containerhost.Find(ctx, port, containerhost.Candidates(ctx))
+	if err != nil || (current != nil && current.Host == c.Host) {
+		return
+	}
+	a.log.Info("Toxiproxy found, syncing", "host", c.Host, "via", c.Source)
+	a.Sync(ctx)
 }
 
 // ensureProxies creates or updates one Toxiproxy proxy per dependency, named
@@ -208,6 +270,7 @@ func (a *App) checkAll(ctx context.Context) {
 	} else {
 		proxies = a.restoreProxies(ctx, tp, deps, proxies)
 	}
+	a.redetect(ctx, tpErr != nil)
 
 	var mu sync.Mutex
 	depStatus := map[string]Status{}
@@ -310,6 +373,10 @@ type View struct {
 type ToxiproxyView struct {
 	API    string `json:"api"`
 	Status Status `json:"status"`
+	// Auto: toxiproxy.api's host is auto. Detected is the host found then,
+	// nil while none answers.
+	Auto     bool                     `json:"auto"`
+	Detected *containerhost.Candidate `json:"detected,omitempty"`
 }
 
 type DependencyView struct {
@@ -352,7 +419,7 @@ func (a *App) View(ctx context.Context) (View, error) {
 	cmdHealth := maps.Clone(a.cmdHealth)
 	running := maps.Clone(a.running)
 	tpStatus := a.tpStatus
-	tpAPI := a.tp.Base()
+	tpView := ToxiproxyView{API: a.tp.Base(), Status: tpStatus, Auto: a.autoPort != "", Detected: a.host}
 	lastSync := a.lastSync
 	a.mu.RUnlock()
 
@@ -360,7 +427,7 @@ func (a *App) View(ctx context.Context) (View, error) {
 		Name:         env.Name,
 		ConfigPath:   env.ConfigPath,
 		SyncedAt:     env.SyncedAt,
-		Toxiproxy:    ToxiproxyView{API: tpAPI, Status: tpStatus},
+		Toxiproxy:    tpView,
 		LastSync:     lastSync,
 		Dependencies: []DependencyView{},
 		Services:     []ServiceView{},

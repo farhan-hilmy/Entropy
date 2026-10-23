@@ -23,6 +23,10 @@ var Kinds = []string{"redis", "mongodb", "postgres", "rabbitmq", "http", "https"
 
 const DefaultToxiproxyAPI = "http://localhost:8474"
 
+// AutoHost as the host of toxiproxy.api or of a dependency address stands for
+// the container host, which Entropy detects on every sync, e.g. http://auto:8474.
+const AutoHost = "auto"
+
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 type Config struct {
@@ -219,6 +223,9 @@ func (v *validator) dependency(position string, d Dependency, seen map[string]bo
 	if d.Redirect && d.Kind != "https" {
 		v.bad("%s: redirect only applies to kind https", label)
 	}
+	if d.Redirect && hostOf(d.Address) == AutoHost {
+		v.bad("%s: redirect needs the hostname in address, not %s", label, AutoHost)
+	}
 }
 
 func (v *validator) service(position string, s Service, seen, deps map[string]bool) {
@@ -278,4 +285,51 @@ func (v *validator) command(service, position string, cmd Command, seen map[stri
 func isHostPort(s string) bool {
 	_, port, err := net.SplitHostPort(s)
 	return err == nil && port != ""
+}
+
+func hostOf(hostport string) string {
+	host, _, _ := net.SplitHostPort(hostport)
+	return host
+}
+
+// AutoAPIPort returns the port of toxiproxy.api when its host is AutoHost,
+// and ok false when the API has an explicit host.
+func (c *Config) AutoAPIPort() (port string, ok bool) {
+	u, err := url.Parse(c.Toxiproxy.API)
+	if err != nil || u.Hostname() != AutoHost {
+		return "", false
+	}
+	if port = u.Port(); port == "" {
+		port = "80"
+		if u.Scheme == "https" {
+			port = "443"
+		}
+	}
+	return port, true
+}
+
+// SetContainerHost replaces AutoHost in toxiproxy.api and in dependency
+// addresses with host. Without an auto API, dependencies' auto means the
+// API's own host.
+func (c *Config) SetContainerHost(host string) {
+	if port, ok := c.AutoAPIPort(); ok {
+		u, _ := url.Parse(c.Toxiproxy.API)
+		u.Host = net.JoinHostPort(host, port)
+		c.Toxiproxy.API = u.String()
+	}
+	for i := range c.Dependencies {
+		d := &c.Dependencies[i]
+		if h, port, err := net.SplitHostPort(d.Address); err == nil && h == AutoHost {
+			d.Address = net.JoinHostPort(host, port)
+		}
+	}
+}
+
+// APIHost is the host of toxiproxy.api.
+func (c *Config) APIHost() string {
+	u, err := url.Parse(c.Toxiproxy.API)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }

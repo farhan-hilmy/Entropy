@@ -53,8 +53,11 @@ export function Overview({ env, onSynced }: { env: Environment; onSynced: () => 
       {env.toxiproxy.status.state === 'unreachable' && (
         <div className="banner error">
           <span>
-            Toxiproxy is not reachable at <code>{env.toxiproxy.api}</code>. Start it, then press Sync. If its address
-            changed (e.g. the Podman VM's, after a reboot), edit it under Settings below.
+            Toxiproxy is not reachable at <code>{env.toxiproxy.api}</code>.{' '}
+            {env.toxiproxy.auto
+              ? 'Start it: Entropy looks for it again every 15 seconds.'
+              : <>Start it, then press Sync. If its address changed (e.g. the Podman VM's, after a reboot), edit it under
+                Settings below, or use <code>http://auto:8474</code> to detect it.</>}
           </span>
         </div>
       )}
@@ -66,7 +69,7 @@ export function Overview({ env, onSynced }: { env: Environment; onSynced: () => 
             <Field label="Environment name" hint="Leave empty for the default, local.">
               <TextInput value={edit.form.name} placeholder="local" onChange={(name) => edit.update({ name })} />
             </Field>
-            <Field label="Toxiproxy API" hint="Leave empty for the default. Remember to update dependency addresses too if the host changed.">
+            <Field label="Toxiproxy API" hint="Leave empty for the default. Use http://auto:8474 to detect the container host on every sync; dependency addresses can use auto too.">
               <TextInput value={edit.form.toxiproxyApi} placeholder="http://localhost:8474" onChange={(toxiproxyApi) => edit.update({ toxiproxyApi })} />
             </Field>
           </div>
@@ -74,6 +77,16 @@ export function Overview({ env, onSynced }: { env: Environment; onSynced: () => 
           <dl className="facts">
             <dt>Environment name</dt><dd>{env.name}</dd>
             <dt>Toxiproxy API</dt><dd><code>{env.toxiproxy.api}</code> <StatusLabel status={env.toxiproxy.status} /></dd>
+            {env.toxiproxy.auto && (
+              <>
+                <dt>Container host</dt>
+                <dd>
+                  {env.toxiproxy.detected
+                    ? <><code>{env.toxiproxy.detected.host}</code> <span className="muted small">auto-detected via {env.toxiproxy.detected.source}</span></>
+                    : <span className="muted small">not found yet, using localhost</span>}
+                </dd>
+              </>
+            )}
           </dl>
         )}
         <EditFooter f={edit} />

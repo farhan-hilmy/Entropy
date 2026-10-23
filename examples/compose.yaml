@@ -10,3 +10,4 @@ services:
     ports:
       - "8474:8474" # Toxiproxy API
       - "6379:6379" # redis proxy
+      - "27017:27017" # mongodb proxy
