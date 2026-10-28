@@ -72,9 +72,11 @@ func (a *App) clearPendingLeftovers(ctx context.Context, tp *toxiproxy.Client) (
 	return true
 }
 
-// StopAllFaults ends every fault Entropy started, then enables every proxy and
-// removes every toxic, including faults added outside Entropy.
+// StopAllFaults aborts the running experiment, ends every fault Entropy
+// started, then enables every proxy and removes every toxic, including faults
+// added outside Entropy.
 func (a *App) StopAllFaults(ctx context.Context) error {
+	a.abortActiveRun("Stop all faults was pressed") // the kill switch also ends the run
 	stopErr := a.faults.StopAll()
 	err := a.client().Reset(ctx)
 	a.CheckSoon()

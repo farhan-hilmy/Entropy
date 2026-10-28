@@ -1,4 +1,4 @@
-import type { Status } from './api'
+import type { Run, Status } from './api'
 
 export type Tone = 'ok' | 'warn' | 'bad' | 'idle'
 
@@ -27,6 +27,19 @@ export function StatusLabel({ status, missing }: { status: Status; missing?: boo
       <Dot tone={tone} /> {label}
     </span>
   )
+}
+
+const verdicts: Record<string, string> = { passed: 'ok', failed: 'bad', inconclusive: 'warn', aborted: '' }
+
+// RunBadge shows a run's verdict, or its current phase while it runs.
+export function RunBadge({ run }: { run: Run }) {
+  if (run.state !== 'done') return <span className="badge">Running · {run.state}</span>
+  return <span className={`badge ${verdicts[run.verdict ?? ''] ?? ''}`}>{run.verdict}</span>
+}
+
+export function seconds(fromIso: string, toIso?: string): string {
+  const ms = (toIso ? new Date(toIso).getTime() : Date.now()) - new Date(fromIso).getTime()
+  return `${(Math.max(0, ms) / 1000).toFixed(1)} s`
 }
 
 export function timeAgo(iso?: string): string {

@@ -42,13 +42,13 @@ var (
 // Spec says what to do to a dependency and for how long. Fields that don't
 // apply to the type must be zero.
 type Spec struct {
-	Type        string `json:"type"`
-	DurationSec int    `json:"durationSec"`
-	LatencyMs   int    `json:"latencyMs,omitempty"` // latency: added to every response (default 1000)
-	JitterMs    int    `json:"jitterMs,omitempty"`  // latency: random ± on top
-	TimeoutMs   int    `json:"timeoutMs,omitempty"` // timeout: close the connection after this; 0 holds it until the fault ends
-	DownSec     int    `json:"downSec,omitempty"`   // flap: time disabled per cycle (default 5)
-	UpSec       int    `json:"upSec,omitempty"`     // flap: time enabled per cycle (default 5)
+	Type        string `yaml:"type" json:"type"`
+	DurationSec int    `yaml:"durationSec" json:"durationSec"`
+	LatencyMs   int    `yaml:"latencyMs,omitempty" json:"latencyMs,omitempty"` // latency: added to every response (default 1000)
+	JitterMs    int    `yaml:"jitterMs,omitempty" json:"jitterMs,omitempty"`   // latency: random ± on top
+	TimeoutMs   int    `yaml:"timeoutMs,omitempty" json:"timeoutMs,omitempty"` // timeout: close the connection after this; 0 holds it until the fault ends
+	DownSec     int    `yaml:"downSec,omitempty" json:"downSec,omitempty"`     // flap: time disabled per cycle (default 5)
+	UpSec       int    `yaml:"upSec,omitempty" json:"upSec,omitempty"`         // flap: time enabled per cycle (default 5)
 }
 
 // WithDefaults fills in defaults and checks the spec.

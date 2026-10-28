@@ -61,7 +61,7 @@ func validate(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s is valid: %d dependencies, %d services\n", *configPath, len(cfg.Dependencies), len(cfg.Services))
+	fmt.Printf("%s is valid: %d dependencies, %d services, %d experiments\n", *configPath, len(cfg.Dependencies), len(cfg.Services), len(cfg.Experiments))
 	return nil
 }
 
@@ -141,6 +141,11 @@ func up(args []string) error {
 		log.Warn("could not clear leftover faults yet; Entropy does it once Toxiproxy answers", "err", err)
 	} else {
 		log.Info("cleared leftover faults")
+	}
+	if n, err := a.EndUnfinishedRuns(ctx); err != nil {
+		log.Warn("could not close runs left unfinished", "err", err)
+	} else if n > 0 {
+		log.Info("marked runs left unfinished as aborted", "runs", n)
 	}
 
 	go a.Run(ctx)

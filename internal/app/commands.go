@@ -77,6 +77,26 @@ func (a *App) claim(service, name string) (release func(), ok bool) {
 	}, true
 }
 
+// claimWhenFree is claim, waiting while the command runs (e.g. a health check
+// started by Sync), for up to wait. ok is false if it's still running then,
+// or ctx ended.
+func (a *App) claimWhenFree(ctx context.Context, service, name string, wait time.Duration) (release func(), ok bool) {
+	deadline := time.Now().Add(wait)
+	for {
+		if release, ok := a.claim(service, name); ok {
+			return release, true
+		}
+		if time.Now().After(deadline) {
+			return nil, false
+		}
+		select {
+		case <-time.After(200 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, false
+		}
+	}
+}
+
 func (a *App) findCommand(ctx context.Context, service, name string) (store.Service, store.Command, error) {
 	svcs, err := a.store.Services(ctx)
 	if err != nil {

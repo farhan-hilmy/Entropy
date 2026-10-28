@@ -72,6 +72,44 @@ CREATE TABLE IF NOT EXISTS command_run (
 	output      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS command_run_recent ON command_run (service, command, started_at);
+-- One row per experiment: its current version and definition (JSON).
+CREATE TABLE IF NOT EXISTS experiment (
+	name       TEXT PRIMARY KEY,
+	version    INTEGER NOT NULL,
+	hash       TEXT NOT NULL,
+	definition TEXT NOT NULL,
+	missing    INTEGER NOT NULL DEFAULT 0
+);
+-- Keyed by experiment name, so history survives the experiment being edited or
+-- removed. snapshot is exactly what ran (JSON), never changed afterwards.
+CREATE TABLE IF NOT EXISTS run (
+	id         TEXT PRIMARY KEY,
+	experiment TEXT NOT NULL,
+	version    INTEGER NOT NULL,
+	snapshot   TEXT NOT NULL,
+	state      TEXT NOT NULL,
+	verdict    TEXT NOT NULL DEFAULT '',
+	reason     TEXT NOT NULL DEFAULT '',
+	started_at TEXT NOT NULL,
+	ended_at   TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS run_recent ON run (experiment, started_at);
+CREATE TABLE IF NOT EXISTS run_event (
+	id      INTEGER PRIMARY KEY AUTOINCREMENT,
+	run_id  TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
+	at      TEXT NOT NULL,
+	type    TEXT NOT NULL,
+	message TEXT NOT NULL,
+	data    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS run_event_run ON run_event (run_id, id);
+CREATE TABLE IF NOT EXISTS assertion_result (
+	run_id  TEXT NOT NULL REFERENCES run(id) ON DELETE CASCADE,
+	idx     INTEGER NOT NULL,
+	outcome TEXT NOT NULL,
+	detail  TEXT NOT NULL,
+	PRIMARY KEY (run_id, idx)
+);
 `
 
 // addedColumns were added after their table was first created. CREATE TABLE IF
@@ -310,6 +348,9 @@ func (s *Store) Sync(ctx context.Context, cfg *config.Config, configPath string)
 		sum.Missing = append(sum.Missing, "service "+name)
 	}
 
+	if err := syncExperiments(ctx, tx, cfg.Experiments, &sum); err != nil {
+		return sum, err
+	}
 	return sum, tx.Commit()
 }
 

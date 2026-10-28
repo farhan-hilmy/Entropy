@@ -34,6 +34,7 @@ type Config struct {
 	Toxiproxy    Toxiproxy    `yaml:"toxiproxy" json:"toxiproxy"`
 	Dependencies []Dependency `yaml:"dependencies" json:"dependencies"`
 	Services     []Service    `yaml:"services" json:"services"`
+	Experiments  []Experiment `yaml:"experiments" json:"experiments"`
 }
 
 type Environment struct {
@@ -164,6 +165,9 @@ func (c *Config) applyDefaults(dir string) {
 			cmd.Cwd = filepath.Clean(cmd.Cwd)
 		}
 	}
+	for i := range c.Experiments {
+		c.Experiments[i].applyDefaults()
+	}
 }
 
 // Validate reports every problem in the config, not just the first one.
@@ -177,8 +181,14 @@ func (c *Config) Validate() error {
 		v.dependency(fmt.Sprintf("dependencies[%d]", i), d, deps)
 	}
 	services := map[string]bool{}
+	byName := map[string]Service{}
 	for i, s := range c.Services {
 		v.service(fmt.Sprintf("services[%d]", i), s, services, deps)
+		byName[s.Name] = s
+	}
+	experiments := map[string]bool{}
+	for i, e := range c.Experiments {
+		v.experiment(fmt.Sprintf("experiments[%d]", i), e, experiments, deps, byName)
 	}
 	return errors.Join(v.errs...)
 }

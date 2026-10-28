@@ -175,6 +175,15 @@ h2 .badge { margin-left: 8px; font-weight: 500; }
 .route-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .narrow-select { width: auto; max-width: 280px; }
 
+.phases { display: flex; gap: 6px; flex-wrap: wrap; }
+.phases .chip.current { border-color: var(--accent); font-weight: 600; }
+.phases .chip.past { opacity: 0.55; }
+.assertion { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--border); }
+.assertion .badge { min-width: 92px; text-align: center; text-transform: capitalize; }
+table.timeline td { padding: 6px 10px; vertical-align: top; }
+table.timeline td:first-child { white-space: nowrap; width: 70px; }
+.event-fault td { background: var(--warn-soft); }
+
 @media (max-width: 760px) {
   .sidebar { display: none; }
   main { padding: 16px; }

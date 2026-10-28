@@ -114,8 +114,61 @@ export interface Service {
   status: Status
 }
 
+// Mirrors internal/config Experiment (as stored, with defaults).
+export interface ExperimentDefinition {
+  name: string
+  description?: string
+  maxDurationSec: number
+  faults: (FaultSpec & { dependency: string; startOffsetSec: number })[] | null
+  triggers: {
+    name: string
+    phase: 'baseline' | 'during' | 'after'
+    command?: string
+    service?: string
+    request?: { method: string; path: string }
+    repeat: number
+    everySec: number
+  }[]
+  recoveryWindowSec: number
+  assertions: {
+    type: 'response' | 'count' | 'eventual' | 'recovery'
+    trigger?: string
+    service?: string
+    expect: { exitCode?: number; outputContains?: string; status?: number; bodyContains?: string }
+    atLeast?: number
+    withinSec?: number
+  }[]
+}
+
+export type Verdict = 'passed' | 'failed' | 'inconclusive' | 'aborted'
+
+// Mirrors internal/store Run. state is the phase while it runs, then "done".
+export interface Run {
+  id: string
+  experiment: string
+  version: number
+  state: string
+  verdict?: Verdict
+  reason?: string
+  startedAt: string
+  endedAt?: string
+  snapshot?: { experiment: ExperimentDefinition }
+  events?: { at: string; type: 'phase' | 'fault' | 'trigger' | 'response' | 'system'; message: string; data?: unknown }[]
+  assertions?: { index: number; outcome: 'pass' | 'fail' | 'not_evaluated'; detail: string }[]
+}
+
+export interface Experiment {
+  name: string
+  version: number
+  definition: ExperimentDefinition
+  missing: boolean
+  lastRun?: Run
+  running: boolean
+}
+
 export interface Environment {
   name: string
+  activeRun?: string
   configPath: string
   syncedAt?: string
   status: 'ready' | 'degraded' | 'unreachable' | 'checking'
@@ -247,6 +300,37 @@ export const api = {
     })
     if (!res.ok) throw await errorFrom(res)
     return res.json()
+  },
+
+  async experiments(): Promise<Experiment[]> {
+    const res = await fetch('/api/experiments')
+    if (!res.ok) throw await errorFrom(res)
+    return res.json()
+  },
+
+  // Starts the run in the background. 409 while another run is in progress.
+  async startRun(experiment: string): Promise<Run> {
+    const res = await fetch(`/api/experiments/${encodeURIComponent(experiment)}/run`, { method: 'POST' })
+    if (!res.ok) throw await errorFrom(res)
+    return res.json()
+  },
+
+  async runs(experiment = ''): Promise<Run[]> {
+    const res = await fetch(`/api/runs${experiment ? `?experiment=${encodeURIComponent(experiment)}` : ''}`)
+    if (!res.ok) throw await errorFrom(res)
+    return res.json()
+  },
+
+  async run(id: string): Promise<Run> {
+    const res = await fetch(`/api/runs/${encodeURIComponent(id)}`)
+    if (!res.ok) throw await errorFrom(res)
+    return res.json()
+  },
+
+  // Resolves once the run is aborted and its faults are removed.
+  async stopRun(id: string): Promise<void> {
+    const res = await fetch(`/api/runs/${encodeURIComponent(id)}/stop`, { method: 'POST' })
+    if (!res.ok) throw await errorFrom(res)
   },
 
   async stopAllFaults(): Promise<void> {

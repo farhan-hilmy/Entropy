@@ -83,6 +83,8 @@ type App struct {
 	// depChecks is read-held by each dependency check while it runs, so a
 	// route check can wait for the ones already in flight.
 	depChecks sync.RWMutex
+
+	run *activeRun // the experiment running now, if any
 }
 
 func New(configPath string, st *store.Store, log *slog.Logger) *App {
@@ -392,6 +394,7 @@ type View struct {
 	LastSync     SyncResult       `json:"lastSync"`
 	Dependencies []DependencyView `json:"dependencies"`
 	Services     []ServiceView    `json:"services"`
+	ActiveRun    string           `json:"activeRun,omitempty"` // the id of the experiment run in progress
 }
 
 type ToxiproxyView struct {
@@ -460,6 +463,7 @@ func (a *App) View(ctx context.Context) (View, error) {
 		LastSync:     lastSync,
 		Dependencies: []DependencyView{},
 		Services:     []ServiceView{},
+		ActiveRun:    a.activeRunID(),
 	}
 
 	usedBy := map[string][]string{}

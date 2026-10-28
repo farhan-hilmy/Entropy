@@ -31,3 +31,48 @@ services:
     #     run: 'bru run "path/to/request.yml" --env "your environment"'
     #     cwd: D:/path/to/bruno-collection   # default: this file's folder
     #     timeoutSec: 30                     # default 30, max 600
+
+# Experiments break dependencies on purpose and check how services behave.
+# Run them from the Experiments page; each change here makes a new version.
+experiments:
+  - name: redis-outage-oauth
+    description: Redis down for 30 s. oauth should fail fast and recover by itself.
+    maxDurationSec: 180          # safety cap: the run is aborted and every fault removed after this
+    faults:                      # none = an integration test
+      - dependency: redis
+        type: outage             # latency | drop | timeout | outage | flap (options as on the Fault panel)
+        durationSec: 30
+    triggers:                    # requests to send, per phase: baseline | during | after
+      - name: token-before
+        phase: baseline
+        service: oauth
+        request: { method: POST, path: /token }   # replace with a request that uses Redis
+      - name: token-during
+        phase: during
+        service: oauth
+        request: { method: POST, path: /token }
+        repeat: 5
+        everySec: 5
+        # or one of the service's commands instead of a request:
+        # command: oauth/access-token
+      - name: token-after
+        phase: after
+        service: oauth
+        request: { method: POST, path: /token }
+        repeat: 10
+        everySec: 2
+    recoveryWindowSec: 30        # how long to watch after the fault is removed
+    assertions:                  # the verdict comes from these
+      - type: response           # every result matches (the baseline must, or the run is inconclusive)
+        trigger: token-before
+        expect: { status: 200 }
+      - type: count              # at least atLeast results match
+        trigger: token-during
+        expect: { status: 503 }  # fails fast instead of hanging or returning 500
+        atLeast: 4
+      - type: eventual           # one result matches within withinSec
+        trigger: token-after
+        expect: { status: 200, bodyContains: access_token }
+        withinSec: 20
+      - type: recovery           # the service's health check passes again within withinSec
+        withinSec: 20

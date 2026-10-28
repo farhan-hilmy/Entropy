@@ -112,6 +112,54 @@ func New(a *app.App, ui fs.FS) http.Handler {
 		writeJSON(w, http.StatusOK, rc)
 	})
 
+	mux.HandleFunc("GET /api/experiments", func(w http.ResponseWriter, r *http.Request) {
+		exps, err := a.Experiments(r.Context())
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, exps)
+	})
+
+	// Starts a run in the background; answers with it at once (409 if one is running).
+	mux.HandleFunc("POST /api/experiments/{name}/run", func(w http.ResponseWriter, r *http.Request) {
+		run, err := a.StartRun(r.Context(), r.PathValue("name"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, run)
+	})
+
+	// The latest runs, newest first; ?experiment= narrows them.
+	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
+		runs, err := a.ExperimentRuns(r.Context(), r.URL.Query().Get("experiment"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, runs)
+	})
+
+	// One run with its snapshot, timeline and assertion results.
+	mux.HandleFunc("GET /api/runs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		run, err := a.ExperimentRun(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, run)
+	})
+
+	// Aborts the run; answers once its faults are removed.
+	mux.HandleFunc("POST /api/runs/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
+		if err := a.StopRun(r.PathValue("id")); err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+
 	mux.HandleFunc("POST /api/faults/stop-all", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.StopAllFaults(r.Context()); err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
@@ -160,7 +208,7 @@ func writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, app.ErrNotFound), errors.Is(err, config.ErrNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, app.ErrAlreadyRunning), errors.Is(err, config.ErrConflict), errors.Is(err, faults.ErrBusy),
-		errors.Is(err, app.ErrVerifying), errors.Is(err, app.ErrFaultActive):
+		errors.Is(err, app.ErrVerifying), errors.Is(err, app.ErrFaultActive), errors.Is(err, app.ErrRunActive):
 		status = http.StatusConflict
 	case errors.As(err, &invalid), errors.Is(err, faults.ErrInvalid), errors.Is(err, app.ErrNoTrigger):
 		status = http.StatusUnprocessableEntity

@@ -123,7 +123,7 @@ services:
     commands:
       - name: token
         run: "  "
-        cwd: D:/surely/not/here
+        cwd: surely-not-here    # relative, so the test runs on any OS
         timeoutSec: 9999
       - name: token
         run: echo hi
@@ -135,7 +135,7 @@ services:
 	for _, want := range []string{
 		"oauth/token: run is required",
 		"oauth/token: timeoutSec must be between 1 and 600",
-		`oauth/token: cwd "D:`,
+		`surely-not-here" is not a folder`,
 		`oauth command "token" is declared twice`,
 		"oauth/commands[2]: name is required",
 	} {

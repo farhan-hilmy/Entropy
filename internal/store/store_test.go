@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -14,7 +15,14 @@ import (
 
 func open(t *testing.T) *Store {
 	t.Helper()
-	st, err := Open(filepath.Join(t.TempDir(), "entropy.db"))
+	// Not t.TempDir: on Windows, a virus scanner can still hold the database
+	// file at cleanup, which fails the test. Leftovers here are harmless.
+	dir, err := os.MkdirTemp("", "entropy-store-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	st, err := Open(filepath.Join(dir, "entropy.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

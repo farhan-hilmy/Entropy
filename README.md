@@ -11,10 +11,11 @@ your service ──► Toxiproxy (proxy per dependency) ──► real dependenc
                   Entropy  (checks status, injects and clears faults)
 ```
 
-> **Current status:** environment setup and faults (MVP build steps 1–2). You
-> can register dependencies and services, see live statuses, apply a timed
-> fault to a dependency and stop all faults. Experiments and runs are not
-> built yet.
+> **Current status:** environment setup, faults, experiments and runs (MVP
+> build steps 1, 2, 4 and 5). You can register dependencies and services, see
+> live statuses, apply a timed fault, verify a service goes through the proxy,
+> and run experiments from `entropy.yaml` that end with a verdict. The
+> experiment editor in the UI is not built yet: you write experiments in the file.
 
 ---
 
@@ -261,8 +262,8 @@ signed requests), let a command decide whether the service is Reachable:
 - A health check and a manual run of the same command never overlap. Health
   checks don't appear in the command's run history.
 
-Commands are what experiments will run later, before, during and after a
-fault. For now you run them by hand.
+Experiments can run commands as triggers (`command: oauth/access-token`),
+before, during and after a fault; see step 6.
 
 ### Apply your changes
 
@@ -335,6 +336,12 @@ you pick) twice: normally, then with 1.5 s of latency on the proxy.
 | **Not seen in the proxy** | It ran just as fast. Either the service connects straight to `upstream`, or that request doesn't use the dependency (e.g. it's cached): try a request that does. |
 | **Couldn't tell** | The request fails even without latency. Fix it or pick another one. |
 
+For a command, Entropy compares the HTTP request time the command prints,
+like Bruno's `Access Token B2B (200 OK) - 52 ms`, when both runs print one.
+A command's own run time includes its startup, which for Bruno varies by
+seconds and would hide the 1.5 s. Otherwise it compares how long the whole
+command took.
+
 While the slowed-down request runs (a few seconds with Bruno), everything
 using that dependency through the proxy is 1.5 s slower. Entropy pauses its
 own checks of the dependency meanwhile. It can't verify during a fault, and
@@ -344,18 +351,74 @@ Traffic counters can't do this job: Toxiproxy counts a connection's bytes
 only when it closes, so pooled connections stay invisible, and it can't
 tell services apart.
 
-## 6. Stop all faults
+## 6. Run an experiment
 
-Press **Stop all faults** in the top bar, on any page. It ends every fault
-Entropy started, then enables every proxy and removes every toxic, including
-ones added outside Entropy. Entropy also does this on startup and on exit, so
+An experiment breaks dependencies on purpose, sends requests to a service
+before, during and after, and checks how it behaved. You write experiments
+under `experiments:` in `entropy.yaml` (`entropy.example.yaml` has a full
+sample with comments), press **Sync**, then press **Run** on the
+**Experiments** page.
+
+```yaml
+experiments:
+  - name: redis-outage-oauth
+    maxDurationSec: 180                    # safety cap (default 600)
+    faults:                                # none = an integration test
+      - { dependency: redis, type: outage, durationSec: 30 }   # + startOffsetSec, and the fault's options
+    triggers:                              # per phase: baseline | during | after
+      - { name: before, phase: baseline, command: oauth/access-token }
+      - { name: during, phase: during, service: oauth, request: { method: POST, path: /token }, repeat: 5, everySec: 5 }
+      - { name: after, phase: after, service: oauth, request: { method: POST, path: /token }, repeat: 10, everySec: 2 }
+    recoveryWindowSec: 30                  # how long the "after" phase watches (default 30)
+    assertions:
+      - { type: response, trigger: before, expect: { exitCode: 0 } }               # every result matches
+      - { type: count, trigger: during, expect: { status: 503 }, atLeast: 4 }      # at least N match
+      - { type: eventual, trigger: after, expect: { status: 200 }, withinSec: 20 } # one matches in time
+      - { type: recovery, withinSec: 20 }  # the service's health check passes again in time
+```
+
+A trigger is either one of the service's commands (`service/command`; expect
+`exitCode`, `outputContains`) or an HTTP `request` to its `baseUrl` (expect
+`status`, `bodyContains`). A run goes:
+
+1. **Preflight**: each faulted dependency is Reachable, and each service is
+   verified to go through the proxy (the same check as **Verify**, using one
+   of the experiment's own commands).
+2. **Baseline**: the `baseline` triggers run; their assertions must hold (the
+   steady state), or the run stops before any fault.
+3. **During**: the faults are applied, then the `during` triggers run. Only
+   results that finish while a fault is on count; a request still going
+   when the faults end is cut off, and no new one starts. Make the fault
+   long enough for the requests you want (e.g. a Bruno run takes seconds).
+4. **Restore**: the faults are removed when their time is up.
+5. **After**: the `after` triggers run and recovery is watched, for up to
+   `recoveryWindowSec`.
+6. **Evaluate**: the verdict comes from the assertions.
+
+| Verdict | Meaning |
+|---|---|
+| **passed** | Every assertion holds: resilient. |
+| **failed** | An assertion was violated. The report says which, and what it got. |
+| **inconclusive** | It couldn't be judged: a dependency wasn't Reachable, the service doesn't go through the proxy, the baseline failed, Toxiproxy went away, or a fault couldn't be removed. |
+| **aborted** | You pressed **Stop run** or **Stop all faults**, it hit `maxDurationSec`, or Entropy stopped during it. Its faults are removed either way. |
+
+The run page follows a run live (phase, assertions, timeline) and is its
+report afterwards; **Runs** lists them all. One experiment runs at a time.
+Each change to an experiment makes a new version, and every run keeps an
+exact copy of what it ran, so editing an experiment never changes a run.
+
+## 7. Stop all faults
+
+Press **Stop all faults** in the top bar, on any page. It aborts the running
+experiment, ends every fault Entropy started, then enables every proxy and
+removes every toxic, including ones added outside Entropy. Entropy also does this on startup and on exit, so
 killing Entropy in the middle of a fault leaves nothing broken after the next
 start. If Toxiproxy isn't reachable at startup, Entropy does it as soon as
 Toxiproxy answers.
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Problem | Fix |
 |---|---|
@@ -371,6 +434,9 @@ Toxiproxy answers.
 | CIDM: *resolves to …, not 127.0.0.1* | The hosts-file line is missing or DNS is cached. Add it and run `ipconfig /flushdns`. |
 | Faults have no effect on my service | The service connects to the real dependency. Press **Verify** on the dependency's page to confirm, then point the service at the `address` in `entropy.yaml`. |
 | Verify says *Not seen in the proxy*, but the service is set up right | The request may not touch the dependency (e.g. answered from a cache). Pick a request that does, from the list next to **Verify**. |
+| Run: *inconclusive: … doesn't seem to reach redis through the proxy* | Preflight verified the route with one of the experiment's commands, or the health check. Point the service at the proxy, or make sure that request uses the dependency. |
+| Run: *inconclusive: the steady state didn't hold before any fault* | A `baseline` assertion failed: the service wasn't healthy to begin with. Its report shows what it got. |
+| Run: *another experiment is running* | One runs at a time. Wait, or open it from the banner on Experiments and press **Stop run**. |
 
 ---
 
@@ -390,18 +456,28 @@ go test ./...
 On Windows, if Defender blocks test binaries in the temp folder, build them
 elsewhere: `go test -c -o .entropy/t.exe ./internal/config && .entropy/t.exe`.
 
+Run the race detector after changing anything concurrent (the run engine,
+faults, checks). It needs cgo, which Go on Windows usually lacks, so run it
+in a Linux container (from Git Bash; paths as for your clone):
+
+```sh
+MSYS_NO_PATHCONV=1 podman run --rm -v "$(pwd -W):/src:ro" -w /src \
+  -e GOFLAGS=-buildvcs=false -e GOCACHE=/tmp/gocache \
+  golang:1.26.3 go test -race ./...
+```
+
 ### Code layout
 
 ```
 cmd/entropy/        CLI: up, validate, run
 internal/config/    load and validate entropy.yaml; edit it in place for the UI
 internal/command/   run a command line with a timeout, kill its process tree
-internal/store/     SQLite: environment, dependencies, services; sync reconcile
+internal/store/     SQLite: environment, dependencies, services, experiment versions, runs; sync reconcile
 internal/toxiproxy/ minimal Toxiproxy API client
 internal/containerhost/ find the container host for "auto" addresses
 internal/faults/    apply faults through Toxiproxy, remove them when their time is up
 internal/checks/    protocol-level checks through the proxy
-internal/app/       sync, status monitor, faults, view for the UI
+internal/app/       sync, status monitor, faults, route checks, run engine, view for the UI
 internal/server/    JSON API + embedded UI
 web/                React + TypeScript + Vite UI
 ```
@@ -417,6 +493,11 @@ web/                React + TypeScript + Vite UI
 | POST | `/api/dependencies/{name}/fault` | Apply a fault: `{type, durationSec, …options}` (see step 5: `latencyMs`, `jitterMs`, `timeoutMs`, `downSec`, `upSec`). 409 if it already has one, 422 if invalid |
 | DELETE | `/api/dependencies/{name}/fault` | Stop the dependency's fault now |
 | POST | `/api/dependencies/{name}/verify` | Check that a service goes through the proxy: `{service, command}` (empty command = its health check). 409 during a fault, 422 if there's no request to run |
+| GET | `/api/experiments` | Experiments with their version and last run |
+| POST | `/api/experiments/{name}/run` | Start a run in the background; answers with it at once. 409 while another run is in progress |
+| GET | `/api/runs` | Latest runs, newest first (`?experiment=` narrows them) |
+| GET | `/api/runs/{id}` | One run: its snapshot, timeline and assertion results |
+| POST | `/api/runs/{id}/stop` | Abort the run; answers once its faults are removed |
 | POST | `/api/faults/stop-all` | End every fault, then reset Toxiproxy |
 | POST | `/api/services/{service}/commands/{command}/run` | Run a command; answers when it finishes (409 if already running) |
 | GET | `/api/command-runs/{id}` | One recorded run with its full output |

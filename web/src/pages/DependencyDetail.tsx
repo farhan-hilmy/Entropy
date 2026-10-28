@@ -34,8 +34,8 @@ export function DependencyDetail({ env, name, onChanged }: { env: Environment; n
           <h1>{d.name}</h1>
           <StatusLabel status={d.status} missing={d.missing} />
         </div>
-        <button className="btn primary" disabled title="Experiments come in build step 3">
-          Start experiment
+        <button className="btn primary" onClick={() => navigate('/experiments')}>
+          Experiments
         </button>
       </div>
 

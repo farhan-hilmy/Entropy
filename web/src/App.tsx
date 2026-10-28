@@ -6,6 +6,9 @@ import { DependenciesList } from './pages/DependenciesList'
 import { DependencyDetail } from './pages/DependencyDetail'
 import { ServicesList } from './pages/ServicesList'
 import { ServiceDetail } from './pages/ServiceDetail'
+import { ExperimentsList } from './pages/ExperimentsList'
+import { RunView } from './pages/RunView'
+import { RunsList } from './pages/RunsList'
 import { Dot } from './ui'
 
 const POLL_MS = 3000
@@ -55,6 +58,12 @@ export default function App() {
       page = <ServiceDetail env={env} name={decodeURIComponent(route[1])} onChanged={refresh} />
     } else if (route[0] === 'services') {
       page = <ServicesList env={env} onChanged={refresh} />
+    } else if (route[0] === 'experiments') {
+      page = <ExperimentsList env={env} />
+    } else if (route[0] === 'runs' && route[1]) {
+      page = <RunView id={decodeURIComponent(route[1])} onChanged={refresh} />
+    } else if (route[0] === 'runs') {
+      page = <RunsList />
     } else {
       page = <Overview env={env} onSynced={refresh} />
     }
@@ -81,8 +90,8 @@ export default function App() {
           <a className={['environment', 'dependencies', 'services'].includes(section) ? 'active' : ''} onClick={() => navigate('/')}>
             Environment
           </a>
-          <a className="disabled" title="Comes in build step 3">Experiments</a>
-          <a className="disabled" title="Comes in build step 4">Runs</a>
+          <a className={section === 'experiments' ? 'active' : ''} onClick={() => navigate('/experiments')}>Experiments</a>
+          <a className={section === 'runs' ? 'active' : ''} onClick={() => navigate('/runs')}>Runs</a>
         </nav>
 
         <main>
