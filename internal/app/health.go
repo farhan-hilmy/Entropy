@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"entropy/internal/command"
 	"entropy/internal/store"
@@ -82,9 +84,30 @@ func healthStatus(cmd store.Command, res command.Result) Status {
 	return Status{State: Reachable, Detail: cmd.Name + " passed", CheckedAt: now}
 }
 
+// lastLine is the last line of output that can say why a command failed. It
+// skips a summary table at the end, drawn with box characters, and its
+// heading, as Bruno prints them after the request that failed.
 func lastLine(output string) string {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" && !isTableLine(line) && !isSummaryHeading(line) {
+			return line
+		}
+	}
 	return strings.TrimSpace(lines[len(lines)-1])
+}
+
+// isTableLine reports whether line is a border or row of a box-drawn table.
+func isTableLine(line string) bool {
+	r, _ := utf8.DecodeRuneInString(line)
+	return r >= 0x2500 && r <= 0x257F // Unicode box drawing
+}
+
+// isSummaryHeading matches a table heading like "📊 Execution Summary".
+func isSummaryHeading(line string) bool {
+	text := strings.TrimLeftFunc(line, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	return strings.HasSuffix(strings.ToLower(text), "summary")
 }
 
 // startHealthCommands runs, in the background, the health commands of every

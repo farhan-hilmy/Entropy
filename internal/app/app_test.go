@@ -163,6 +163,27 @@ func TestHealthStatus(t *testing.T) {
 	}
 }
 
+func TestLastLineSkipsBrunoSummary(t *testing.T) {
+	// Real `bru run` output (Windows line endings) for a service that isn't running.
+	bruno := "Oauth Service\\Access Token B2B (connect ECONNREFUSED 127.0.0.1:8080)\r\n\r\n" +
+		"📊 Execution Summary\r\n" +
+		"┌───────────────┬──────────────┐\r\n" +
+		"│ Metric        │    Result    │\r\n" +
+		"├───────────────┼──────────────┤\r\n" +
+		"│ Status        │    ✗ FAIL    │\r\n" +
+		"└───────────────┴──────────────┘\r\n"
+	cases := map[string]string{
+		bruno: `Oauth Service\Access Token B2B (connect ECONNREFUSED 127.0.0.1:8080)`,
+		"running...\n  AssertionError: expected 500 to equal 200 \n": "AssertionError: expected 500 to equal 200",
+		"┌──┐\n└──┘\n":                                               "└──┘", // nothing else: fall back to the last line
+	}
+	for output, want := range cases {
+		if got := lastLine(output); got != want {
+			t.Errorf("lastLine(%q) = %q, want %q", output, got, want)
+		}
+	}
+}
+
 func TestSameListen(t *testing.T) {
 	cases := []struct {
 		a, b string
