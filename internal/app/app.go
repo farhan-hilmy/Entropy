@@ -74,6 +74,15 @@ type App struct {
 	// leftoversPending: clearing leftover faults at startup failed, so the
 	// first check round that reaches Toxiproxy does it.
 	leftoversPending bool
+	// verifying: dependencies whose route is being checked; check rounds
+	// leave them alone, so Entropy's own traffic doesn't count. routes holds
+	// the last route check per "service/dependency".
+	verifying map[string]bool
+	routes    map[string]RouteCheck
+
+	// depChecks is read-held by each dependency check while it runs, so a
+	// route check can wait for the ones already in flight.
+	depChecks sync.RWMutex
 }
 
 func New(configPath string, st *store.Store, log *slog.Logger) *App {
@@ -286,13 +295,22 @@ func (a *App) checkAll(ctx context.Context) {
 			continue
 		}
 		wg.Go(func() {
-			st := checkDependency(ctx, d, proxies, tpErr)
+			a.depChecks.RLock()
+			defer a.depChecks.RUnlock()
+			var st Status
+			if a.isVerifying(d.Name) {
+				st = a.lastDepStatus(d.Name) // its check would add to the traffic being measured
+			} else {
+				st = checkDependency(ctx, d, proxies, tpErr)
+			}
 			mu.Lock()
 			depStatus[d.Name] = st
 			mu.Unlock()
 		})
 	}
-	a.startHealthCommands(ctx, svcs, a.dueByInterval)
+	if !a.anyVerifying() { // a health command could also reach the dependency being verified
+		a.startHealthCommands(ctx, svcs, a.dueByInterval)
+	}
 	for _, s := range svcs {
 		if _, ok := healthCommand(s); ok || s.Missing {
 			continue
@@ -393,6 +411,9 @@ type DependencyView struct {
 	UsedBy         []string `json:"usedBy"`
 	// Fault is the fault Entropy applied to this dependency, until it's removed.
 	Fault *faults.Fault `json:"fault,omitempty"`
+	// Routes is the last route check of each service that has one, by service.
+	Routes    map[string]RouteCheck `json:"routes"`
+	Verifying bool                  `json:"verifying"` // a route check is running now
 }
 
 type ServiceView struct {
@@ -459,11 +480,15 @@ func (a *App) View(ctx context.Context) (View, error) {
 		v.Services = append(v.Services, ServiceView{Service: s, Status: st, Checking: checking, Commands: commandViews(s, running, recent)})
 	}
 	active := a.faults.Active()
+	routes := a.routesByDependency()
 	for _, d := range deps {
 		st := statusOr(depStatus, d.Name)
-		dv := DependencyView{Dependency: d, Status: st, UsedBy: usedBy[d.Name]}
+		dv := DependencyView{Dependency: d, Status: st, UsedBy: usedBy[d.Name], Routes: routes[d.Name], Verifying: a.isVerifying(d.Name)}
 		if dv.UsedBy == nil {
 			dv.UsedBy = []string{}
+		}
+		if dv.Routes == nil {
+			dv.Routes = map[string]RouteCheck{}
 		}
 		if f, ok := active[d.Name]; ok {
 			dv.Fault = &f
@@ -493,6 +518,12 @@ func faultStatus(f faults.Fault, checked Status) Status {
 		}
 	}
 	return Status{State: FaultActive, Detail: detail, CheckedAt: checked.CheckedAt}
+}
+
+func (a *App) lastDepStatus(name string) Status {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return statusOr(a.deps, name)
 }
 
 func statusOr(m map[string]Status, name string) Status {

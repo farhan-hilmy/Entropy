@@ -35,6 +35,21 @@ export interface Dependency {
   notReadyReason?: string
   usedBy: string[]
   fault?: Fault
+  routes: Record<string, RouteCheck> // last route check, by service
+  verifying: boolean
+}
+
+// Mirrors internal/app RouteCheck: does the service reach the dependency through its proxy?
+export interface RouteCheck {
+  service: string
+  dependency: string
+  state: 'verified' | 'not_seen' | 'unknown'
+  detail: string
+  trigger: string
+  normalMs: number
+  slowedMs: number // the same request with latencyMs of latency on the proxy
+  latencyMs: number
+  checkedAt: string
 }
 
 // Mirrors internal/faults: Types, Spec and Fault.
@@ -220,6 +235,18 @@ export const api = {
   async stopFault(dependency: string): Promise<void> {
     const res = await fetch(`/api/dependencies/${encodeURIComponent(dependency)}/fault`, { method: 'DELETE' })
     if (!res.ok) throw await errorFrom(res)
+  },
+
+  // Runs one of the service's requests (command; empty = its health check) and
+  // reports whether it went through the dependency's proxy. 409 while a fault is on it.
+  async verifyRoute(dependency: string, service: string, command: string): Promise<RouteCheck> {
+    const res = await fetch(`/api/dependencies/${encodeURIComponent(dependency)}/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ service, command }),
+    })
+    if (!res.ok) throw await errorFrom(res)
+    return res.json()
   },
 
   async stopAllFaults(): Promise<void> {

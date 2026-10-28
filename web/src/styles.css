@@ -170,6 +170,11 @@ tr:last-child td { border-bottom: none; }
 .banner pre { margin: 0; }
 h2 .badge { margin-left: 8px; font-weight: 500; }
 
+.routes { display: flex; flex-direction: column; }
+.route { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid var(--border); }
+.route-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.narrow-select { width: auto; max-width: 280px; }
+
 @media (max-width: 760px) {
   .sidebar { display: none; }
   main { padding: 16px; }

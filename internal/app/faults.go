@@ -22,6 +22,9 @@ func (a *App) StartFault(ctx context.Context, dependency string, spec faults.Spe
 	if !known {
 		return faults.Fault{}, fmt.Errorf("%w: no dependency %s in the config file", ErrNotFound, dependency)
 	}
+	if a.isVerifying(dependency) { // its route check opens and closes the proxy
+		return faults.Fault{}, ErrVerifying
+	}
 	f, err := a.faults.Start(ctx, dependency, spec)
 	a.CheckSoon()
 	return f, err

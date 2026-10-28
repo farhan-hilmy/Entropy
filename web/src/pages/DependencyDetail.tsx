@@ -3,6 +3,7 @@ import { EditFooter, Field, TextInput, useConfigForm, type ConfigForm } from '..
 import { navigate } from '../route'
 import { StatusLabel, timeAgo } from '../ui'
 import { FaultPanel } from './FaultPanel'
+import { RoutesPanel } from './RoutesPanel'
 
 export function DependencyDetail({ env, name, onChanged }: { env: Environment; name: string; onChanged: () => void }) {
   const edit = useConfigForm<DependencyFields>(
@@ -55,20 +56,14 @@ export function DependencyDetail({ env, name, onChanged }: { env: Environment; n
 
       {!d.missing && <FaultPanel d={d} onChanged={onChanged} />}
 
-      <section className="panel">
-        <h2>Used by services</h2>
-        {d.usedBy.length === 0 ? (
-          <p className="muted small">No service declares this dependency in its <code>uses</code> list.</p>
-        ) : (
+      {d.missing ? (
+        <section className="panel">
+          <h2>Used by services</h2>
           <div className="chips">{d.usedBy.map((s) => <span key={s} className="chip">{s}</span>)}</div>
-        )}
-        {d.usedBy.length > 0 && !d.missing && (
-          <p className="muted small">
-            Make sure these services connect to <code>{d.address}</code>, not straight to <code>{d.upstream}</code>.
-            Otherwise faults have no effect.
-          </p>
-        )}
-      </section>
+        </section>
+      ) : (
+        <RoutesPanel d={d} env={env} onChanged={onChanged} />
+      )}
     </>
   )
 }

@@ -167,6 +167,8 @@ You need three things for each dependency:
    setting (e.g. `MONGO_URI`) to the `address` above, **not** the real
    MongoDB. With `auto`, use the container host shown on the Environment
    page. If the service connects directly, faults have no effect on it.
+   To check, press **Verify** next to the service under *Used by services*
+   on the dependency's page (see [Verify that a service uses the proxy](#verify-that-a-service-uses-the-proxy)).
 
 ### Add a service
 
@@ -319,6 +321,29 @@ for a fixed time (1 to 3600 seconds), then removes it:
   duration.
 - The fault only affects services that connect through the proxy.
 
+### Verify that a service uses the proxy
+
+A service that connects straight to the real dependency never sees a fault,
+so an experiment against it would wrongly look like a pass. On a
+dependency's page, *Used by services* has a **Verify** button per service:
+Entropy runs one of the service's requests (its health check, or a command
+you pick) twice: normally, then with 1.5 s of latency on the proxy.
+
+| Result | Meaning |
+|---|---|
+| **Goes through the proxy** | The request got clearly slower (or failed) with latency on the proxy. |
+| **Not seen in the proxy** | It ran just as fast. Either the service connects straight to `upstream`, or that request doesn't use the dependency (e.g. it's cached): try a request that does. |
+| **Couldn't tell** | The request fails even without latency. Fix it or pick another one. |
+
+While the slowed-down request runs (a few seconds with Bruno), everything
+using that dependency through the proxy is 1.5 s slower. Entropy pauses its
+own checks of the dependency meanwhile. It can't verify during a fault, and
+a port-only health check never reaches the dependency, so it isn't offered.
+
+Traffic counters can't do this job: Toxiproxy counts a connection's bytes
+only when it closes, so pooled connections stay invisible, and it can't
+tell services apart.
+
 ## 6. Stop all faults
 
 Press **Stop all faults** in the top bar, on any page. It ends every fault
@@ -344,7 +369,8 @@ Toxiproxy answers.
 | Save in the UI: *the config file changed since it was read* | The file was edited elsewhere meanwhile. Cancel, open Edit again, redo the change. |
 | *The UI is not built yet* | Run `npm install && npm run build` in `web/`, then restart Entropy. |
 | CIDM: *resolves to …, not 127.0.0.1* | The hosts-file line is missing or DNS is cached. Add it and run `ipconfig /flushdns`. |
-| Faults have no effect on my service | The service connects to the real dependency. Point it at the `address` in `entropy.yaml`. |
+| Faults have no effect on my service | The service connects to the real dependency. Press **Verify** on the dependency's page to confirm, then point the service at the `address` in `entropy.yaml`. |
+| Verify says *Not seen in the proxy*, but the service is set up right | The request may not touch the dependency (e.g. answered from a cache). Pick a request that does, from the list next to **Verify**. |
 
 ---
 
@@ -390,6 +416,7 @@ web/                React + TypeScript + Vite UI
 | PATCH | `/api/config` | Save one change and sync: `{hash, <part>}` with one of `environment`, `dependency`, `service`, `addDependency`, `addService`. 409 if the file changed since `hash`, 422 if the result is invalid |
 | POST | `/api/dependencies/{name}/fault` | Apply a fault: `{type, durationSec, …options}` (see step 5: `latencyMs`, `jitterMs`, `timeoutMs`, `downSec`, `upSec`). 409 if it already has one, 422 if invalid |
 | DELETE | `/api/dependencies/{name}/fault` | Stop the dependency's fault now |
+| POST | `/api/dependencies/{name}/verify` | Check that a service goes through the proxy: `{service, command}` (empty command = its health check). 409 during a fault, 422 if there's no request to run |
 | POST | `/api/faults/stop-all` | End every fault, then reset Toxiproxy |
 | POST | `/api/services/{service}/commands/{command}/run` | Run a command; answers when it finishes (409 if already running) |
 | GET | `/api/command-runs/{id}` | One recorded run with its full output |

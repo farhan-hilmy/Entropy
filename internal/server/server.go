@@ -90,6 +90,28 @@ func New(a *app.App, ui fs.FS) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 
+	// Runs one of the service's requests ({service, command}; command empty =
+	// its health check) and reports whether it went through the dependency's
+	// proxy. Answers when the request finishes.
+	mux.HandleFunc("POST /api/dependencies/{name}/verify", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Service string `json:"service"`
+			Command string `json:"command"`
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		rc, err := a.VerifyRoute(r.Context(), r.PathValue("name"), body.Service, body.Command)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, rc)
+	})
+
 	mux.HandleFunc("POST /api/faults/stop-all", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.StopAllFaults(r.Context()); err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
@@ -137,9 +159,10 @@ func writeError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, app.ErrNotFound), errors.Is(err, config.ErrNotFound):
 		status = http.StatusNotFound
-	case errors.Is(err, app.ErrAlreadyRunning), errors.Is(err, config.ErrConflict), errors.Is(err, faults.ErrBusy):
+	case errors.Is(err, app.ErrAlreadyRunning), errors.Is(err, config.ErrConflict), errors.Is(err, faults.ErrBusy),
+		errors.Is(err, app.ErrVerifying), errors.Is(err, app.ErrFaultActive):
 		status = http.StatusConflict
-	case errors.As(err, &invalid), errors.Is(err, faults.ErrInvalid):
+	case errors.As(err, &invalid), errors.Is(err, faults.ErrInvalid), errors.Is(err, app.ErrNoTrigger):
 		status = http.StatusUnprocessableEntity
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
