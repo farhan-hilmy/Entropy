@@ -4,6 +4,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -151,6 +152,28 @@ func New(a *app.App, ui fs.FS) http.Handler {
 		writeJSON(w, http.StatusOK, run)
 	})
 
+	// Runs a finished run's experiment again, exactly as it ran (only addresses
+	// come from the current setup); answers with the new run at once.
+	mux.HandleFunc("POST /api/runs/{id}/rerun", func(w http.ResponseWriter, r *http.Request) {
+		run, err := a.Rerun(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, run)
+	})
+
+	// The run's experiment as YAML, to paste under experiments: in entropy.yaml.
+	mux.HandleFunc("GET /api/runs/{id}/experiment.yaml", func(w http.ResponseWriter, r *http.Request) {
+		text, err := a.RunExperimentYAML(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+		io.WriteString(w, text)
+	})
+
 	// Aborts the run; answers once its faults are removed.
 	mux.HandleFunc("POST /api/runs/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.StopRun(r.PathValue("id")); err != nil {
@@ -208,7 +231,7 @@ func writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, app.ErrNotFound), errors.Is(err, config.ErrNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, app.ErrAlreadyRunning), errors.Is(err, config.ErrConflict), errors.Is(err, faults.ErrBusy),
-		errors.Is(err, app.ErrVerifying), errors.Is(err, app.ErrFaultActive), errors.Is(err, app.ErrRunActive):
+		errors.Is(err, app.ErrVerifying), errors.Is(err, app.ErrFaultActive), errors.Is(err, app.ErrRunActive), errors.Is(err, app.ErrNotFinished):
 		status = http.StatusConflict
 	case errors.As(err, &invalid), errors.Is(err, faults.ErrInvalid), errors.Is(err, app.ErrNoTrigger):
 		status = http.StatusUnprocessableEntity

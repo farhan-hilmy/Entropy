@@ -117,6 +117,7 @@ CREATE TABLE IF NOT EXISTS assertion_result (
 var addedColumns = []struct{ table, column, definition string }{
 	{"service", "health_command", "TEXT NOT NULL DEFAULT ''"},
 	{"service", "health_every_sec", "INTEGER NOT NULL DEFAULT 0"},
+	{"run", "rerun_of", "TEXT NOT NULL DEFAULT ''"},
 }
 
 func migrate(db *sql.DB) error {

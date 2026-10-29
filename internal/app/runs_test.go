@@ -277,6 +277,82 @@ func TestEditingTheExperimentDuringARunDoesntChangeIt(t *testing.T) {
 	}
 }
 
+func TestRerunRepeatsTheRunExactlyWhereThingsAreNow(t *testing.T) {
+	f := newRunFixture(t, outageExperiment())
+	orig := f.runToEnd(t)
+	if orig.Verdict != VerdictPassed {
+		t.Fatalf("first run: %s (%s)", orig.Verdict, orig.Reason)
+	}
+	if _, err := f.app.Rerun(context.Background(), "nope"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("rerun of an unknown run: err = %v, want ErrNotFound", err)
+	}
+
+	// Since then: the experiment was edited (v2 would fail: it expects 200
+	// during the outage), and Redis moved (e.g. the Podman VM's address changed).
+	edited := *f.cfg
+	edited.Experiments = []config.Experiment{outageExperiment()}
+	edited.Experiments[0].Assertions[1].Expect.Status = 200
+	edited.Dependencies = []config.Dependency{f.cfg.Dependencies[0]}
+	edited.Dependencies[0].Address = "127.0.0.2:6379"
+	if _, err := f.app.store.Sync(context.Background(), &edited, "entropy.yaml"); err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := f.app.Rerun(context.Background(), orig.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := f.waitDone(t, again.ID)
+	if r.Verdict != VerdictPassed || r.Version != 1 || r.RerunOf != orig.ID {
+		t.Fatalf("rerun: %s (%s), v%d, rerun of %q; want passed, v1, rerun of %s\n%s", r.Verdict, r.Reason, r.Version, r.RerunOf, orig.ID, timeline(r))
+	}
+	var snap runSnapshot
+	json.Unmarshal(r.Snapshot, &snap)
+	if snap.Dependencies["redis"].Address != "127.0.0.2:6379" || snap.Experiment.Assertions[1].Expect.Status != 503 {
+		t.Errorf("rerun ran redis at %s with during expecting %d; want the new address and the original assertions",
+			snap.Dependencies["redis"].Address, snap.Experiment.Assertions[1].Expect.Status)
+	}
+	for _, want := range []string{"Rerun of run " + orig.ID, "redis is now at 127.0.0.2:6379"} {
+		if !strings.Contains(timeline(r), want) {
+			t.Errorf("timeline is missing %q\n%s", want, timeline(r))
+		}
+	}
+	exps, _ := f.app.Experiments(context.Background())
+	if len(exps[0].Recent) != 2 || exps[0].Recent[0].ID != again.ID {
+		t.Errorf("recent runs = %+v; want the rerun, then the original", exps[0].Recent)
+	}
+}
+
+func TestRunExperimentYAMLLoadsBackAsTheSameExperiment(t *testing.T) {
+	f := newRunFixture(t, outageExperiment())
+	orig := f.runToEnd(t)
+	text, err := f.app.RunExperimentYAML(context.Background(), orig.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp("", "entropy-yaml-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	file := `
+dependencies: [{ name: redis, kind: redis, address: 127.0.0.1:6379, upstream: redis:6379 }]
+services: [{ name: oauth, baseUrl: "http://127.0.0.1:8080", healthCheck: /health }]
+experiments:
+` + text
+	path := filepath.Join(dir, "entropy.yaml")
+	os.WriteFile(path, []byte(file), 0o644)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("the copied YAML doesn't load: %v\n%s", err, text)
+	}
+	want, _ := json.Marshal(outageExperiment())
+	got, _ := json.Marshal(cfg.Experiments[0])
+	if string(got) != string(want) {
+		t.Errorf("round trip changed the experiment:\n got %s\nwant %s\nYAML:\n%s", got, want, text)
+	}
+}
+
 func TestRunFailsWhenAnAssertionDoesnt(t *testing.T) {
 	f := newRunFixture(t, outageExperiment())
 	f.outageStatus = 500 // breaks instead of failing fast

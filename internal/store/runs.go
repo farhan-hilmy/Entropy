@@ -26,6 +26,7 @@ type Run struct {
 	ID         string            `json:"id"`
 	Experiment string            `json:"experiment"`
 	Version    int               `json:"version"`
+	RerunOf    string            `json:"rerunOf,omitempty"` // the run this one repeats exactly
 	Snapshot   json.RawMessage   `json:"snapshot,omitempty"`
 	State      string            `json:"state"`
 	Verdict    string            `json:"verdict,omitempty"`
@@ -141,8 +142,8 @@ func (s *Store) CreateRun(ctx context.Context, r *Run) error {
 		r.ID = newID()
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO run (id, experiment, version, snapshot, state, started_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		r.ID, r.Experiment, r.Version, string(r.Snapshot), r.State, formatTime(r.StartedAt))
+		`INSERT INTO run (id, experiment, version, rerun_of, snapshot, state, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		r.ID, r.Experiment, r.Version, r.RerunOf, string(r.Snapshot), r.State, formatTime(r.StartedAt))
 	return err
 }
 
@@ -256,7 +257,7 @@ func (s *Store) queryRuns(ctx context.Context, withSnapshot bool, where string, 
 		snapshot = `snapshot`
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, experiment, version, `+snapshot+`, state, verdict, reason, started_at, ended_at FROM run `+where, args...)
+		`SELECT id, experiment, version, rerun_of, `+snapshot+`, state, verdict, reason, started_at, ended_at FROM run `+where, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +266,7 @@ func (s *Store) queryRuns(ctx context.Context, withSnapshot bool, where string, 
 	for rows.Next() {
 		var r Run
 		var snapshot, started, ended string
-		if err := rows.Scan(&r.ID, &r.Experiment, &r.Version, &snapshot, &r.State, &r.Verdict, &r.Reason, &started, &ended); err != nil {
+		if err := rows.Scan(&r.ID, &r.Experiment, &r.Version, &r.RerunOf, &snapshot, &r.State, &r.Verdict, &r.Reason, &started, &ended); err != nil {
 			return nil, err
 		}
 		if snapshot != "" {

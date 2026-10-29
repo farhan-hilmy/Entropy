@@ -147,6 +147,7 @@ export interface Run {
   id: string
   experiment: string
   version: number
+  rerunOf?: string // the run this one repeats exactly
   state: string
   verdict?: Verdict
   reason?: string
@@ -163,6 +164,7 @@ export interface Experiment {
   definition: ExperimentDefinition
   missing: boolean
   lastRun?: Run
+  recent: Run[] // the latest runs, newest first
   running: boolean
 }
 
@@ -325,6 +327,20 @@ export const api = {
     const res = await fetch(`/api/runs/${encodeURIComponent(id)}`)
     if (!res.ok) throw await errorFrom(res)
     return res.json()
+  },
+
+  // Runs a finished run's experiment again exactly as it ran; addresses come from the current setup.
+  async rerun(id: string): Promise<Run> {
+    const res = await fetch(`/api/runs/${encodeURIComponent(id)}/rerun`, { method: 'POST' })
+    if (!res.ok) throw await errorFrom(res)
+    return res.json()
+  },
+
+  // The run's experiment as YAML, to paste under experiments: in entropy.yaml.
+  async runExperimentYaml(id: string): Promise<string> {
+    const res = await fetch(`/api/runs/${encodeURIComponent(id)}/experiment.yaml`)
+    if (!res.ok) throw await errorFrom(res)
+    return res.text()
   },
 
   // Resolves once the run is aborted and its faults are removed.

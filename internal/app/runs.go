@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,8 @@ import (
 	"entropy/internal/config"
 	"entropy/internal/faults"
 	"entropy/internal/store"
+
+	"gopkg.in/yaml.v3"
 )
 
 // A run executes one experiment: preflight → baseline → during (faults on) →
@@ -35,7 +38,10 @@ const (
 	stateDone = "done"
 )
 
-var ErrRunActive = errors.New("another experiment is running; stop it or wait for it to finish")
+var (
+	ErrRunActive   = errors.New("another experiment is running; stop it or wait for it to finish")
+	ErrNotFinished = errors.New("this run hasn't finished yet")
+)
 
 // restoreWait is how long a run waits for its faults to be removed before
 // calling it a cleanup problem.
@@ -82,6 +88,73 @@ func (a *App) StartRun(ctx context.Context, name string) (store.Run, error) {
 	if err != nil {
 		return store.Run{}, err
 	}
+	return a.startRun(ctx, store.Run{Experiment: exp.Name, Version: exp.Version}, snap, nil)
+}
+
+// Rerun runs a finished run's experiment again exactly as it ran: the same
+// faults, triggers, assertions and service commands, whatever entropy.yaml
+// says now. Only where things are (dependency addresses, service base URLs)
+// comes from the current setup, since e.g. the Podman VM's address can change
+// after a reboot; differences are noted in the new run's timeline.
+func (a *App) Rerun(ctx context.Context, id string) (store.Run, error) {
+	orig, err := a.ExperimentRun(ctx, id)
+	if err != nil {
+		return store.Run{}, err
+	}
+	if orig.State != stateDone {
+		return store.Run{}, fmt.Errorf("%w: run %s", ErrNotFinished, id)
+	}
+	var snap runSnapshot
+	if err := json.Unmarshal(orig.Snapshot, &snap); err != nil {
+		return store.Run{}, fmt.Errorf("reading run %s's copy of the experiment: %w", id, err)
+	}
+	notes, err := a.relocate(ctx, &snap)
+	if err != nil {
+		return store.Run{}, err
+	}
+	return a.startRun(ctx, store.Run{Experiment: orig.Experiment, Version: orig.Version, RerunOf: orig.ID}, snap, notes)
+}
+
+// relocate updates where the snapshot's dependencies and services are to the
+// current setup, and describes what it changed.
+func (a *App) relocate(ctx context.Context, snap *runSnapshot) ([]string, error) {
+	deps, err := a.store.Dependencies(ctx)
+	if err != nil {
+		return nil, err
+	}
+	svcs, err := a.store.Services(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var notes []string
+	for name, old := range snap.Dependencies {
+		i := slices.IndexFunc(deps, func(d store.Dependency) bool { return d.Name == name && !d.Missing })
+		if i < 0 {
+			return nil, fmt.Errorf("%w: dependency %s is no longer in the config file, so the run can't be repeated", ErrNotFound, name)
+		}
+		now := deps[i]
+		if now.Address != old.Address || now.Upstream != old.Upstream || now.Listen != old.Listen {
+			notes = append(notes, fmt.Sprintf("%s is now at %s (upstream %s); it was at %s (upstream %s)", name, now.Address, now.Upstream, old.Address, old.Upstream))
+		}
+		snap.Dependencies[name] = now
+	}
+	for name, old := range snap.Services {
+		i := slices.IndexFunc(svcs, func(s store.Service) bool { return s.Name == name && !s.Missing })
+		if i < 0 {
+			return nil, fmt.Errorf("%w: service %s is no longer in the config file, so the run can't be repeated", ErrNotFound, name)
+		}
+		if now := svcs[i].BaseURL; now != old.BaseURL {
+			notes = append(notes, fmt.Sprintf("%s is now at %s; it was at %s", name, now, old.BaseURL))
+			old.BaseURL = now
+			snap.Services[name] = old // its commands and health check stay as they ran
+		}
+	}
+	return notes, nil
+}
+
+// startRun stores the run and executes it in the background. notes go first
+// in its timeline.
+func (a *App) startRun(ctx context.Context, run store.Run, snap runSnapshot, notes []string) (store.Run, error) {
 	raw, err := json.Marshal(snap)
 	if err != nil {
 		return store.Run{}, err
@@ -97,7 +170,7 @@ func (a *App) StartRun(ctx context.Context, name string) (store.Run, error) {
 	a.run = active
 	a.mu.Unlock()
 
-	run := store.Run{Experiment: exp.Name, Version: exp.Version, Snapshot: raw, State: "preflight", StartedAt: time.Now().UTC()}
+	run.Snapshot, run.State, run.StartedAt = raw, "preflight", time.Now().UTC()
 	if err := a.store.CreateRun(ctx, &run); err != nil {
 		cancel(nil)
 		a.mu.Lock()
@@ -106,6 +179,12 @@ func (a *App) StartRun(ctx context.Context, name string) (store.Run, error) {
 		return store.Run{}, err
 	}
 	active.id = run.ID
+	if run.RerunOf != "" {
+		notes = append([]string{fmt.Sprintf("Rerun of run %s: version %d of %s, exactly as it ran", run.RerunOf, run.Version, run.Experiment)}, notes...)
+	}
+	for _, n := range notes {
+		a.store.AddRunEvent(ctx, run.ID, store.RunEvent{At: time.Now().UTC(), Type: "system", Message: n})
+	}
 	go a.execute(runCtx, active, run, snap)
 	return run, nil
 }
@@ -160,9 +239,13 @@ func (a *App) ExperimentRun(ctx context.Context, id string) (store.Run, error) {
 // ExperimentView is an experiment with its latest run, for the UI.
 type ExperimentView struct {
 	store.Experiment
-	LastRun *store.Run `json:"lastRun,omitempty"`
-	Running bool       `json:"running"` // its run is in progress now
+	LastRun *store.Run  `json:"lastRun,omitempty"`
+	Recent  []store.Run `json:"recent"`  // the latest runs, newest first, for its trend
+	Running bool        `json:"running"` // its run is in progress now
 }
+
+// recentRunsPerExperiment is how many runs an experiment's trend shows.
+const recentRunsPerExperiment = 10
 
 func (a *App) Experiments(ctx context.Context) ([]ExperimentView, error) {
 	exps, err := a.store.Experiments(ctx)
@@ -172,14 +255,37 @@ func (a *App) Experiments(ctx context.Context) ([]ExperimentView, error) {
 	active := a.activeRunID()
 	out := make([]ExperimentView, 0, len(exps))
 	for _, e := range exps {
-		v := ExperimentView{Experiment: e}
-		if runs, err := a.store.Runs(ctx, e.Name, 1); err == nil && len(runs) > 0 {
+		v := ExperimentView{Experiment: e, Recent: []store.Run{}}
+		if runs, err := a.store.Runs(ctx, e.Name, recentRunsPerExperiment); err == nil && len(runs) > 0 {
+			v.Recent = runs
 			v.LastRun = &runs[0]
 			v.Running = runs[0].ID == active
 		}
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// RunExperimentYAML returns the experiment a run ran as YAML, as one item to
+// paste under `experiments:` in entropy.yaml.
+func (a *App) RunExperimentYAML(ctx context.Context, id string) (string, error) {
+	run, err := a.ExperimentRun(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	var snap runSnapshot
+	if err := json.Unmarshal(run.Snapshot, &snap); err != nil {
+		return "", err
+	}
+	out, err := yaml.Marshal([]config.Experiment{snap.Experiment})
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	for i := range lines {
+		lines[i] = "  " + lines[i] // indented to sit under experiments:
+	}
+	return fmt.Sprintf("  # %s, version %d, as run %s ran it\n%s\n", run.Experiment, run.Version, run.ID, strings.Join(lines, "\n")), nil
 }
 
 // ExperimentRuns returns the latest runs, newest first; experiment narrows them.

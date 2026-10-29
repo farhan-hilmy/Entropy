@@ -37,6 +37,22 @@ export function RunBadge({ run }: { run: Run }) {
   return <span className={`badge ${verdicts[run.verdict ?? ''] ?? ''}`}>{run.verdict}</span>
 }
 
+// Trend shows runs' verdicts as dots, oldest left, newest right.
+export function Trend({ runs, onOpen }: { runs: Run[]; onOpen: (id: string) => void }) {
+  return (
+    <span className="trend">
+      {[...runs].reverse().map((r) => (
+        <button
+          key={r.id}
+          className={`trend-dot ${r.state === 'done' ? r.verdict : 'running'}`}
+          title={`${r.state === 'done' ? r.verdict : 'running'} · v${r.version} · ${new Date(r.startedAt).toLocaleString()}${r.reason ? ` — ${r.reason}` : ''}`}
+          onClick={(e) => { e.stopPropagation(); onOpen(r.id) }}
+        />
+      ))}
+    </span>
+  )
+}
+
 export function seconds(fromIso: string, toIso?: string): string {
   const ms = (toIso ? new Date(toIso).getTime() : Date.now()) - new Date(fromIso).getTime()
   return `${(Math.max(0, ms) / 1000).toFixed(1)} s`

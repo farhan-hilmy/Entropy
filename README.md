@@ -403,9 +403,23 @@ A trigger is either one of the service's commands (`service/command`; expect
 | **aborted** | You pressed **Stop run** or **Stop all faults**, it hit `maxDurationSec`, or Entropy stopped during it. Its faults are removed either way. |
 
 The run page follows a run live (phase, assertions, timeline) and is its
-report afterwards; **Runs** lists them all. One experiment runs at a time.
-Each change to an experiment makes a new version, and every run keeps an
-exact copy of what it ran, so editing an experiment never changes a run.
+report afterwards; **Runs** lists them all, filtered by experiment and
+verdict, and **Experiments** shows each experiment's recent verdicts as
+dots, oldest left. One experiment runs at a time. Each change to an
+experiment makes a new version, and every run keeps an exact copy of what it
+ran, so editing an experiment never changes a run.
+
+On a finished run's report:
+
+- **Rerun vN** repeats that run exactly: the same experiment version and the
+  same service commands, whatever `entropy.yaml` says now. Only *where things
+  are* (dependency addresses, service base URLs) comes from your current
+  setup, so a rerun still works after e.g. the Podman VM's address changed;
+  the new run's timeline says what moved, and links back to the original.
+- **Run current (vN)** appears when the experiment has changed since, and
+  runs what's in the file now.
+- **Copy as YAML** copies the run's experiment, ready to paste under
+  `experiments:`, e.g. to bring back an older version and adjust it.
 
 ## 7. Stop all faults
 
@@ -498,6 +512,8 @@ web/                React + TypeScript + Vite UI
 | GET | `/api/runs` | Latest runs, newest first (`?experiment=` narrows them) |
 | GET | `/api/runs/{id}` | One run: its snapshot, timeline and assertion results |
 | POST | `/api/runs/{id}/stop` | Abort the run; answers once its faults are removed |
+| POST | `/api/runs/{id}/rerun` | Run a finished run's experiment again exactly as it ran (addresses from the current setup); answers with the new run. 409 if it hasn't finished or another run is in progress |
+| GET | `/api/runs/{id}/experiment.yaml` | The run's experiment as YAML, to paste under `experiments:` |
 | POST | `/api/faults/stop-all` | End every fault, then reset Toxiproxy |
 | POST | `/api/services/{service}/commands/{command}/run` | Run a command; answers when it finishes (409 if already running) |
 | GET | `/api/command-runs/{id}` | One recorded run with its full output |

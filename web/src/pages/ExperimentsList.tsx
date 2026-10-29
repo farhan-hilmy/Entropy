@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type Environment, type Experiment, type ExperimentDefinition } from '../api'
 import { navigate } from '../route'
-import { RunBadge, timeAgo } from '../ui'
+import { RunBadge, timeAgo, Trend } from '../ui'
 
 export function ExperimentsList({ env }: { env: Environment }) {
   const [experiments, setExperiments] = useState<Experiment[] | null>(null)
@@ -57,7 +57,7 @@ export function ExperimentsList({ env }: { env: Environment }) {
       ) : (
         <table>
           <thead>
-            <tr><th>Experiment</th><th>Breaks</th><th>Version</th><th>Last run</th><th /></tr>
+            <tr><th>Experiment</th><th>Breaks</th><th>Version</th><th>Last run</th><th>Recent runs</th><th /></tr>
           </thead>
           <tbody>
             {experiments.map((x) => (
@@ -77,6 +77,11 @@ export function ExperimentsList({ env }: { env: Environment }) {
                   ) : <span className="muted small">Never run</span>}
                 </td>
                 <td>
+                  {x.recent.length > 0
+                    ? <Trend runs={x.recent} onOpen={(id) => navigate(`/runs/${id}`)} />
+                    : <span className="muted small">—</span>}
+                </td>
+                <td>
                   <button className="btn primary" onClick={() => start(x.name)} disabled={x.missing || !!env.activeRun || starting !== ''}>
                     {starting === x.name ? 'Starting…' : 'Run'}
                   </button>
@@ -86,7 +91,19 @@ export function ExperimentsList({ env }: { env: Environment }) {
           </tbody>
         </table>
       )}
+      {experiments && experiments.some((x) => x.recent.length > 0) && <TrendLegend />}
     </>
+  )
+}
+
+export function TrendLegend() {
+  return (
+    <p className="legend muted small">
+      Recent runs, oldest left:
+      {['passed', 'failed', 'inconclusive', 'aborted'].map((v) => (
+        <span key={v}><span className={`trend-dot ${v}`} /> {v}</span>
+      ))}
+    </p>
   )
 }
 
