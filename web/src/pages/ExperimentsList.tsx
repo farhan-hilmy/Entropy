@@ -66,6 +66,7 @@ export function ExperimentsList({ env }: { env: Environment }) {
                   <div className="name">{x.name}</div>
                   {x.definition.description && <div className="muted small">{x.definition.description}</div>}
                   {x.missing && <div className="muted small">Removed from the config file</div>}
+                  {!x.missing && <TimingNotes timing={x.timing} />}
                 </td>
                 <td className="small">{breaks(x.definition)}</td>
                 <td>v{x.version}</td>
@@ -92,6 +93,19 @@ export function ExperimentsList({ env }: { env: Environment }) {
         </table>
       )}
       {experiments && experiments.some((x) => x.recent.length > 0) && <TrendLegend />}
+    </>
+  )
+}
+
+// TimingNotes says whether the experiment's requests fit its fault and recovery window.
+function TimingNotes({ timing }: { timing: Experiment['timing'] }) {
+  return (
+    <>
+      {timing.warnings.map((w) => <div key={w} className="timing-warning small">⚠ {w}</div>)}
+      {timing.note && <div className="muted small">{timing.note}</div>}
+      {timing.measured === 'full' && timing.warnings.length === 0 && (
+        <div className="muted small">✓ Its requests fit, by the times measured in past runs.</div>
+      )}
     </>
   )
 }

@@ -402,6 +402,29 @@ A trigger is either one of the service's commands (`service/command`; expect
 | **inconclusive** | It couldn't be judged: a dependency wasn't Reachable, the service doesn't go through the proxy, the baseline failed, Toxiproxy went away, or a fault couldn't be removed. |
 | **aborted** | You pressed **Stop run** or **Stop all faults**, it hit `maxDurationSec`, or Entropy stopped during it. Its faults are removed either way. |
 
+**Will it fit?** On Sync and on the Experiments page, Entropy checks each
+experiment's timing against how long its requests actually took, and warns
+(it never blocks) when they can't fit, e.g. *"token-during: 4 runs of ~20 s
+(measured during the fault) need ~79 s, but the faults last 30 s, so only 1
+would count"*. It also catches an `after` phase longer than
+`recoveryWindowSec`, a `recovery` `withinSec` shorter than the health check
+itself, and a run longer than `maxDurationSec`. Whether requests fit uses
+their typical (median) time. The run's total against `maxDurationSec` (the
+preflight's route checks, the baseline, the faults and the recovery window)
+uses the slowest time measured instead, since being aborted wastes a whole
+run, and it says how many measurements that comes from. How sure the check
+is depends on what it has measured:
+
+| Measured | From | Means |
+|---|---|---|
+| **full** | past runs of this experiment, `during` requests timed under the fault | warnings and "fits" are both based on real times |
+| **partial** | only normal times: command runs, health checks, other phases | estimates are lower bounds (failures are often slower), so a warning is certain but "fits" isn't |
+| **none** | a request was never run | no timing warnings, just a note to run it once |
+
+Whatever was measured, faults plus `recoveryWindowSec` longer than
+`maxDurationSec` is an error in `entropy validate`, since every run would be
+aborted.
+
 The run page follows a run live (phase, assertions, timeline) and is its
 report afterwards; **Runs** lists them all, filtered by experiment and
 verdict, and **Experiments** shows each experiment's recent verdicts as

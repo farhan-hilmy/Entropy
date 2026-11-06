@@ -242,6 +242,7 @@ type ExperimentView struct {
 	LastRun *store.Run  `json:"lastRun,omitempty"`
 	Recent  []store.Run `json:"recent"`  // the latest runs, newest first, for its trend
 	Running bool        `json:"running"` // its run is in progress now
+	Timing  Timing      `json:"timing"`  // whether its requests fit, from measured durations
 }
 
 // recentRunsPerExperiment is how many runs an experiment's trend shows.
@@ -252,10 +253,14 @@ func (a *App) Experiments(ctx context.Context) ([]ExperimentView, error) {
 	if err != nil {
 		return nil, err
 	}
+	svcs, err := a.store.Services(ctx)
+	if err != nil {
+		return nil, err
+	}
 	active := a.activeRunID()
 	out := make([]ExperimentView, 0, len(exps))
 	for _, e := range exps {
-		v := ExperimentView{Experiment: e, Recent: []store.Run{}}
+		v := ExperimentView{Experiment: e, Recent: []store.Run{}, Timing: a.timingFor(ctx, e, svcs)}
 		if runs, err := a.store.Runs(ctx, e.Name, recentRunsPerExperiment); err == nil && len(runs) > 0 {
 			v.Recent = runs
 			v.LastRun = &runs[0]
@@ -396,6 +401,7 @@ func (a *App) execute(ctx context.Context, active *activeRun, run store.Run, sna
 		a.log.Error("saving the run's verdict", "run", r.id, "err", err)
 	}
 	a.log.Info("experiment run ended", "experiment", r.exp.Name, "run", r.id, "verdict", verdict, "reason", reason)
+	a.forgetTimings() // the run measured new durations
 	a.CheckSoon()
 }
 

@@ -166,6 +166,9 @@ export interface Experiment {
   lastRun?: Run
   recent: Run[] // the latest runs, newest first
   running: boolean
+  // Whether its requests fit, from measured durations: full (all measured, "during"
+  // ones under the fault), partial (some only outside a fault: lower bounds), none.
+  timing: { measured: 'full' | 'partial' | 'none'; warnings: string[]; note?: string }
 }
 
 export interface Environment {

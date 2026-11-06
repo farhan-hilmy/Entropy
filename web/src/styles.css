@@ -195,6 +195,7 @@ table.timeline td:first-child { white-space: nowrap; width: 70px; }
 .legend { display: inline-flex; gap: 12px; align-items: center; }
 .legend span { display: inline-flex; gap: 4px; align-items: center; }
 .legend .trend-dot { cursor: default; }
+.timing-warning { background: var(--warn-soft); border-radius: 4px; padding: 4px 8px; margin-top: 4px; max-width: 560px; }
 
 @media (max-width: 760px) {
   .sidebar { display: none; }

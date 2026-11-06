@@ -100,6 +100,29 @@ func (t Trigger) ServiceOf() string {
 	return t.Service
 }
 
+// FaultSpanSec is how long, from the first fault starting, until the last one
+// ends: the "during" phase.
+func (e Experiment) FaultSpanSec() int {
+	if len(e.Faults) == 0 {
+		return 0
+	}
+	first, last := e.Faults[0].StartOffsetSec, 0
+	for _, f := range e.Faults {
+		first = min(first, f.StartOffsetSec)
+		last = max(last, f.StartOffsetSec+f.DurationSec)
+	}
+	return last - first
+}
+
+// FaultsEndSec is when the last fault ends, counted from the end of the baseline.
+func (e Experiment) FaultsEndSec() int {
+	end := 0
+	for _, f := range e.Faults {
+		end = max(end, f.StartOffsetSec+f.DurationSec)
+	}
+	return end
+}
+
 // CommandName is the command part of "service/command", or "".
 func (t Trigger) CommandName() string {
 	_, cmd, _ := strings.Cut(t.Command, "/")
@@ -159,6 +182,13 @@ func (v *validator) experiment(position string, e Experiment, seen, deps map[str
 		v.bad("%s: recoveryWindowSec must be between 0 and %d", label, MaxRecoveryWindowSec)
 	}
 
+	// Whatever the requests take, the faults and the recovery window alone
+	// must fit in the safety cap, or every run would be aborted.
+	if need := e.FaultsEndSec() + e.RecoveryWindowSec; need >= e.MaxDurationSec && e.MaxDurationSec > 0 {
+		v.bad("%s: the faults end %d s after the baseline and recoveryWindowSec adds %d s, %d s in all, so maxDurationSec %d would abort every run. "+
+			"It must be more than %d s plus the preflight and baseline; the Experiments page estimates those once the experiment has run",
+			label, e.FaultsEndSec(), e.RecoveryWindowSec, need, e.MaxDurationSec, need)
+	}
 	faulted := map[string]bool{}
 	for i, f := range e.Faults {
 		fl := fmt.Sprintf("%s: faults[%d]", label, i)

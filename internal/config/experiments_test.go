@@ -130,6 +130,22 @@ experiments:
 	}
 }
 
+func TestFaultsMustFitInMaxDuration(t *testing.T) {
+	_, err := Load(write(t, experimentBase+`
+experiments:
+  - name: too-short
+    maxDurationSec: 100
+    recoveryWindowSec: 30
+    faults:
+      - { dependency: redis, type: outage, durationSec: 60, startOffsetSec: 10 }
+    triggers: [{ name: t, phase: during, command: oauth/access-token }]
+    assertions: [{ type: recovery, withinSec: 10 }]
+`))
+	if err == nil || !strings.Contains(err.Error(), "the faults end 70 s after the baseline and recoveryWindowSec adds 30 s, 100 s in all, so maxDurationSec 100") {
+		t.Errorf("err = %v; want the run-would-always-abort error", err)
+	}
+}
+
 func TestExpectMustFitTheTrigger(t *testing.T) {
 	_, err := Load(write(t, experimentBase+`
 experiments:

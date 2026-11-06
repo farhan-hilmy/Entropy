@@ -85,6 +85,11 @@ type App struct {
 	depChecks sync.RWMutex
 
 	run *activeRun // the experiment running now, if any
+	// healthTook is how long each "service/command" took as a health check
+	// last time; health runs aren't kept in the command history.
+	healthTook map[string]time.Duration
+
+	timings timingCache // each experiment's last timing check
 }
 
 func New(configPath string, st *store.Store, log *slog.Logger) *App {
@@ -130,6 +135,7 @@ func (a *App) Sync(ctx context.Context) SyncResult {
 		return res
 	}
 	res.Summary = &sum
+	res.Warnings = append(res.Warnings, a.timingWarnings(ctx, cfg.Experiments)...)
 
 	tp := toxiproxy.New(cfg.Toxiproxy.API)
 	a.mu.Lock()

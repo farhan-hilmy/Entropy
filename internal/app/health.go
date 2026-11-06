@@ -63,6 +63,12 @@ func (a *App) runHealthCommand(ctx context.Context, s store.Service) (Status, er
 	st := healthStatus(cmd, res)
 	a.mu.Lock()
 	a.cmdHealth[s.Name] = st
+	if res.Err == nil && !res.TimedOut {
+		if a.healthTook == nil {
+			a.healthTook = map[string]time.Duration{}
+		}
+		a.healthTook[s.Name+"/"+cmd.Name] = res.Duration // a timing sample for experiments' feasibility check
+	}
 	a.mu.Unlock()
 	return st, nil
 }
