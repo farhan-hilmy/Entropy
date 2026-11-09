@@ -146,6 +146,42 @@ experiments:
 	}
 }
 
+func TestVerifyWith(t *testing.T) {
+	cfg, err := Load(write(t, experimentBase+`
+experiments:
+  - name: ok
+    verifyWith: { oauth: token }
+    triggers:
+      - { name: login, phase: baseline, service: oauth, request: { path: /login } }
+      - { name: token, phase: baseline, command: oauth/access-token }
+    assertions: [{ type: recovery }]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := cfg.Experiments[0]
+	if probe, _ := e.ProbeTrigger("oauth"); probe.Name != "token" {
+		t.Errorf("probe = %s; verifyWith names token", probe.Name)
+	}
+	e.VerifyWith = nil
+	if probe, _ := e.ProbeTrigger("oauth"); probe.Name != "login" {
+		t.Errorf("probe = %s; without verifyWith, the service's first trigger", probe.Name)
+	}
+
+	_, err = Load(write(t, experimentBase+`
+experiments:
+  - name: bad
+    verifyWith: { oauth: nope, billing: token }
+    triggers: [{ name: token, phase: baseline, command: oauth/access-token }]
+    assertions: [{ type: recovery }]
+`))
+	for _, want := range []string{`verifyWith oauth: trigger "nope": no such trigger`, "verifyWith billing: trigger token sends to oauth, not billing"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v; want %q", err, want)
+		}
+	}
+}
+
 func TestExpectMustFitTheTrigger(t *testing.T) {
 	_, err := Load(write(t, experimentBase+`
 experiments:

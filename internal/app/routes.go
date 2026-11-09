@@ -11,6 +11,7 @@ import (
 
 	"entropy/internal/checks"
 	"entropy/internal/command"
+	"entropy/internal/config"
 	"entropy/internal/store"
 	"entropy/internal/toxiproxy"
 )
@@ -63,12 +64,47 @@ func (a *App) VerifyRoute(ctx context.Context, dependency, service, command stri
 	if err != nil {
 		return RouteCheck{}, err
 	}
-	if _, ok := a.faults.Active()[dependency]; ok {
-		return RouteCheck{}, ErrFaultActive
-	}
 	trigger, run, err := routeTrigger(s, command)
 	if err != nil {
 		return RouteCheck{}, err
+	}
+	return a.verifyRoute(ctx, d, s, trigger, run)
+}
+
+// verifyRouteWith is VerifyRoute with one of an experiment's triggers: one of
+// the service's commands, or an HTTP request to it.
+func (a *App) verifyRouteWith(ctx context.Context, dependency string, t config.Trigger) (RouteCheck, error) {
+	d, s, err := a.findRoute(ctx, dependency, t.ServiceOf())
+	if err != nil {
+		return RouteCheck{}, err
+	}
+	if t.Command != "" {
+		trigger, run, err := routeTrigger(s, t.CommandName())
+		if err != nil {
+			return RouteCheck{}, err
+		}
+		return a.verifyRoute(ctx, d, s, trigger, run)
+	}
+	req := *t.Request
+	// An HTTP request has no startup cost, so its own run time is precise.
+	return a.verifyRoute(ctx, d, s, req.Method+" "+req.Path, func(ctx context.Context, _ *App) (probe, error) {
+		status, _, err := sendRequest(ctx, s.BaseURL, req)
+		switch {
+		case err != nil:
+			return probe{failure: err.Error()}, nil
+		case status >= 400:
+			return probe{failure: fmt.Sprintf("status %d", status)}, nil
+		}
+		return probe{}, nil
+	})
+}
+
+// verifyRoute runs the request twice, the second time with latency on d's
+// proxy, and records what it found.
+func (a *App) verifyRoute(ctx context.Context, d store.Dependency, s store.Service, trigger string, run func(context.Context, *App) (probe, error)) (RouteCheck, error) {
+	dependency := d.Name
+	if _, ok := a.faults.Active()[dependency]; ok {
+		return RouteCheck{}, ErrFaultActive
 	}
 	release, ok := a.pauseChecks(dependency)
 	if !ok {
@@ -110,7 +146,7 @@ func (a *App) VerifyRoute(ctx context.Context, dependency, service, command stri
 		return RouteCheck{}, err
 	}
 
-	normal, slowed, what := compareTimes(normalRun, slowedRun)
+	normal, slowed, what := compareTimes(trigger, normalRun, slowedRun)
 	rc.NormalMs, rc.SlowedMs = normal.Milliseconds(), slowed.Milliseconds()
 	switch {
 	case slowedRun.failure != "":
@@ -146,11 +182,11 @@ func timed(ctx context.Context, a *App, run func(context.Context, *App) (probe, 
 // command's own run time includes its startup, which for Bruno varies by
 // seconds and drowns the added latency; so when both runs printed their HTTP
 // request time, that is compared instead.
-func compareTimes(normal, slowed probe) (time.Duration, time.Duration, string) {
+func compareTimes(trigger string, normal, slowed probe) (time.Duration, time.Duration, string) {
 	if normal.reported > 0 && slowed.reported > 0 {
-		return normal.reported, slowed.reported, "the HTTP request it printed"
+		return normal.reported, slowed.reported, trigger + " (the HTTP request it printed)"
 	}
-	return normal.wall, slowed.wall, "it"
+	return normal.wall, slowed.wall, trigger
 }
 
 // brunoRequestTime matches the line Bruno prints per request, e.g.

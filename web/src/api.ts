@@ -138,6 +138,8 @@ export interface ExperimentDefinition {
     atLeast?: number
     withinSec?: number
   }[]
+  // service -> the trigger the preflight's route check runs for it
+  verifyWith?: Record<string, string>
 }
 
 export type Verdict = 'passed' | 'failed' | 'inconclusive' | 'aborted'

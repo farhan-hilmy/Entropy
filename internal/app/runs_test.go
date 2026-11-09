@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -350,6 +351,59 @@ experiments:
 	got, _ := json.Marshal(cfg.Experiments[0])
 	if string(got) != string(want) {
 		t.Errorf("round trip changed the experiment:\n got %s\nwant %s\nYAML:\n%s", got, want, text)
+	}
+}
+
+func TestPreflightStopsAtADownServiceBeforeAnyRouteCheck(t *testing.T) {
+	f := newRunFixture(t, outageExperiment())
+	// The 5-second check just found oauth down.
+	f.app.services = map[string]Status{"oauth": {State: Unreachable, Detail: "connect ECONNREFUSED 127.0.0.1:8080", CheckedAt: time.Now()}}
+	r := f.runToEnd(t)
+	if r.Verdict != VerdictInconclusive || !strings.Contains(r.Reason, "oauth isn't healthy (connect ECONNREFUSED 127.0.0.1:8080)") {
+		t.Fatalf("verdict %s (%s); want inconclusive naming oauth", r.Verdict, r.Reason)
+	}
+	if strings.Contains(timeline(r), "Route check") || strings.Contains(timeline(r), "Reachable through its proxy") {
+		t.Errorf("nothing else should run once a service is down\n%s", timeline(r))
+	}
+
+	// An old failure isn't trusted: the run goes on, and the baseline judges.
+	f.app.services = map[string]Status{"oauth": {State: Unreachable, CheckedAt: time.Now().Add(-2 * healthFreshFor)}}
+	if r := f.runToEnd(t); r.Verdict != VerdictPassed {
+		t.Errorf("with a stale failure: verdict %s (%s), want passed", r.Verdict, r.Reason)
+	}
+}
+
+func TestRouteCheckUsesTheExperimentsOwnRequest(t *testing.T) {
+	// The experiment only has HTTP request triggers (GET /token); oauth also
+	// has a health URL. The route check must use the request, not /health.
+	f := newRunFixture(t, outageExperiment())
+	r := f.runToEnd(t)
+	if r.Verdict != VerdictPassed || !strings.Contains(timeline(r), "Route check: GET /token took") {
+		t.Errorf("verdict %s (%s); want the route check run with GET /token\n%s", r.Verdict, r.Reason, timeline(r))
+	}
+}
+
+func TestRouteCheckSkipsServicesThatDontUseTheDependency(t *testing.T) {
+	f := newRunFixture(t, outageExperiment())
+	// A second service, billing, that doesn't use redis, gets a baseline request too.
+	cfg := *f.cfg
+	billing := cfg.Services[0]
+	billing.Name, billing.Uses = "billing", nil
+	cfg.Services = append(slices.Clone(cfg.Services), billing)
+	exp := outageExperiment()
+	exp.Triggers = append(exp.Triggers, config.Trigger{Name: "bill", Phase: "baseline", Service: "billing", Repeat: 1,
+		Request: &config.Request{Method: "GET", Path: "/bill"}})
+	exp.Assertions = append(exp.Assertions, config.Assertion{Type: "response", Trigger: "bill", Expect: config.Expect{Status: 200}})
+	cfg.Experiments = []config.Experiment{exp}
+	if _, err := f.app.store.Sync(context.Background(), &cfg, "entropy.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	r := f.runToEnd(t)
+	if r.Verdict != VerdictPassed {
+		t.Fatalf("verdict %s (%s)\n%s", r.Verdict, r.Reason, timeline(r))
+	}
+	if n := strings.Count(timeline(r), "Route check:"); n != 1 || strings.Contains(timeline(r), "/bill took") {
+		t.Errorf("%d route checks; want only oauth's (billing doesn't use redis)\n%s", n, timeline(r))
 	}
 }
 

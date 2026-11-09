@@ -30,6 +30,29 @@ func healthCommand(s store.Service) (store.Command, bool) {
 	return store.Command{}, false
 }
 
+// healthFreshFor is how old a failed health check may be for an experiment's
+// preflight to trust it. Health commands only run on Sync or Check now, so an
+// older failure may be outdated: then the baseline judges instead.
+const healthFreshFor = time.Minute
+
+// recentlyUnhealthy is why the service's last health check failed, if it
+// failed within healthFreshFor; "" otherwise.
+func (a *App) recentlyUnhealthy(s store.Service) string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	st := a.services[s.Name] // the 5-second URL or port check
+	if _, ok := healthCommand(s); ok {
+		st = a.cmdHealth[s.Name]
+	}
+	if st.State != Unreachable || time.Since(st.CheckedAt) > healthFreshFor {
+		return ""
+	}
+	if st.Detail == "" {
+		return "Unreachable"
+	}
+	return st.Detail
+}
+
 // CheckService runs a service's health command now and returns the new status.
 func (a *App) CheckService(ctx context.Context, name string) (Status, error) {
 	svcs, err := a.store.Services(ctx)

@@ -27,6 +27,7 @@ func oauthOutage() config.Experiment {
 }
 
 var oauthHealth = map[string]string{"oauth": "oauth/oauth"} // its health command is the same Bruno request
+var oauthUses = map[string][]string{"oauth": {"redis"}}
 
 func secs(ss ...float64) []time.Duration {
 	out := make([]time.Duration, len(ss))
@@ -36,8 +37,15 @@ func secs(ss ...float64) []time.Duration {
 	return out
 }
 
+func TestTimingWarnsWhenNoServiceUsesTheFaultedDependency(t *testing.T) {
+	got := assessTiming(oauthOutage(), map[string]samples{}, oauthHealth, map[string][]string{"oauth": {"mongodb"}})
+	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "no service this experiment sends to uses redis") {
+		t.Errorf("warnings = %q; want the one about breaking redis testing nothing", got.Warnings)
+	}
+}
+
 func TestTimingNotMeasuredYet(t *testing.T) {
-	got := assessTiming(oauthOutage(), map[string]samples{}, oauthHealth)
+	got := assessTiming(oauthOutage(), map[string]samples{}, oauthHealth, oauthUses)
 	if got.Measured != "none" || len(got.Warnings) != 0 || !strings.Contains(got.Note, "Not measured yet: token-before (oauth/oauth)") {
 		t.Errorf("timing = %+v; want none, no warnings (no guessing), and a note saying what to run", got)
 	}
@@ -45,7 +53,7 @@ func TestTimingNotMeasuredYet(t *testing.T) {
 
 func TestTimingLowerBoundFromNormalRuns(t *testing.T) {
 	// Only health checks so far: ~8 s each, never under a fault.
-	got := assessTiming(oauthOutage(), map[string]samples{"oauth/oauth": {normal: secs(7.5, 8, 8.5)}}, oauthHealth)
+	got := assessTiming(oauthOutage(), map[string]samples{"oauth/oauth": {normal: secs(7.5, 8, 8.5)}}, oauthHealth, oauthUses)
 	if got.Measured != "partial" || !strings.Contains(got.Note, "Not measured during a fault yet: token-during") {
 		t.Errorf("timing = %+v; want partial, with a note about the lower bound", got)
 	}
@@ -59,7 +67,7 @@ func TestTimingLowerBoundFromNormalRuns(t *testing.T) {
 func TestTimingFullFromARunUnderTheFault(t *testing.T) {
 	// The real first run: each request took ~23 s during the outage.
 	s := map[string]samples{"oauth/oauth": {normal: secs(8, 9.5, 8), underFault: secs(23, 22.5, 23.5)}}
-	got := assessTiming(oauthOutage(), s, oauthHealth)
+	got := assessTiming(oauthOutage(), s, oauthHealth, oauthUses)
 	if got.Measured != "full" || got.Note != "" {
 		t.Errorf("timing = %+v; want full", got)
 	}
@@ -73,7 +81,7 @@ func TestTimingFullFromARunUnderTheFault(t *testing.T) {
 	fixed.Faults[0].DurationSec, fixed.MaxDurationSec = 100, 300
 	fixed.Triggers[1].Repeat, fixed.Triggers[1].EverySec = 3, 0
 	fixed.Assertions[0].AtLeast = 3
-	if got := assessTiming(fixed, s, oauthHealth); len(got.Warnings) != 0 {
+	if got := assessTiming(fixed, s, oauthHealth, oauthUses); len(got.Warnings) != 0 {
 		t.Errorf("the fixed experiment fits, but got %q", got.Warnings)
 	}
 }
@@ -88,7 +96,7 @@ func TestTimingAfterRecoveryAndTotal(t *testing.T) {
 	e.MaxDurationSec = 135
 	// Three runs of the Bruno request: typical (median) 9 s, slowest 12 s.
 	s := map[string]samples{"oauth/oauth": {normal: secs(8, 9, 12), underFault: secs(23)}}
-	got := strings.Join(assessTiming(e, s, oauthHealth).Warnings, "\n")
+	got := strings.Join(assessTiming(e, s, oauthHealth, oauthUses).Warnings, "\n")
 	for _, want := range []string{
 		// Whether requests fit: the typical time.
 		"token-after: 4 run(s) of ~9.0 s need ~36 s, but recoveryWindowSec is 30, so the last 1 would be cut off",
@@ -103,7 +111,7 @@ func TestTimingAfterRecoveryAndTotal(t *testing.T) {
 	}
 
 	e.MaxDurationSec = 170 // enough even on the slowest day measured
-	for _, w := range assessTiming(e, s, oauthHealth).Warnings {
+	for _, w := range assessTiming(e, s, oauthHealth, oauthUses).Warnings {
 		if strings.Contains(w, "maxDurationSec") {
 			t.Errorf("maxDurationSec 170 holds 167.5 s, but got %q", w)
 		}

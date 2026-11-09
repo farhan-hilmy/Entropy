@@ -381,9 +381,21 @@ A trigger is either one of the service's commands (`service/command`; expect
 `exitCode`, `outputContains`) or an HTTP `request` to its `baseUrl` (expect
 `status`, `bodyContains`). A run goes:
 
-1. **Preflight**: each faulted dependency is Reachable, and each service is
-   verified to go through the proxy (the same check as **Verify**, using one
-   of the experiment's own commands).
+1. **Preflight**, cheapest first:
+   - each service is healthy: a health check that failed in the last
+     minute stops the run, naming the service (an older or missing result
+     doesn't block; the baseline still catches a down service);
+   - each faulted dependency is Reachable and has no other fault;
+   - each service that **uses** a faulted dependency (its `uses:` list) is
+     verified to go through the proxy: the same check as **Verify**, run
+     with the service's first trigger in the experiment, a command or an
+     HTTP request. Name another one with `verifyWith`, per service, when
+     the first doesn't use the dependency:
+     ```yaml
+     verifyWith: { oauth: token-before }
+     ```
+     A faulted dependency that no service here uses is skipped, and Sync
+     warns that breaking it may test nothing.
 2. **Baseline**: the `baseline` triggers run; their assertions must hold (the
    steady state), or the run stops before any fault.
 3. **During**: the faults are applied, then the `during` triggers run. Only

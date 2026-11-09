@@ -62,6 +62,10 @@ experiments:
         repeat: 10
         everySec: 2
     recoveryWindowSec: 30        # how long to watch after the fault is removed
+    # Preflight checks that each service using a faulted dependency goes through
+    # its proxy, with the service's first trigger. Name another per service if
+    # that one doesn't touch the dependency:
+    # verifyWith: { oauth: token-during }
     assertions:                  # the verdict comes from these
       - type: response           # every result matches (the baseline must, or the run is inconclusive)
         trigger: token-before

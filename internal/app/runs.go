@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -515,8 +516,19 @@ func (r *runner) event(typ, message string, data any) {
 	}
 }
 
-// preflight returns why the run can't start, or "".
+// preflight returns why the run can't start, or "". Cheapest first: the
+// services are healthy, the dependencies reachable and free, then each
+// service that uses a faulted dependency goes through its proxy.
 func (r *runner) preflight(ctx context.Context) string {
+	for _, name := range slices.Sorted(maps.Keys(r.snap.Services)) {
+		s := r.snap.Services[name]
+		if s.Missing {
+			return fmt.Sprintf("service %s is not in the config file", name)
+		}
+		if why := r.a.recentlyUnhealthy(s); why != "" {
+			return fmt.Sprintf("%s isn't healthy (%s), so the experiment can't say anything about it. Start it, then run again.", name, why)
+		}
+	}
 	for _, f := range r.exp.Faults {
 		d, ok := r.snap.Dependencies[f.Dependency]
 		if !ok || d.Missing {
@@ -530,20 +542,19 @@ func (r *runner) preflight(ctx context.Context) string {
 		}
 		r.event("system", f.Dependency+" is Reachable through its proxy", nil)
 	}
-	for name, s := range r.snap.Services {
-		if s.Missing {
-			return fmt.Sprintf("service %s is not in the config file", name)
-		}
-	}
-	// A service that doesn't go through the proxy would make the run pass for nothing.
+	// A service that doesn't go through the proxy would make the run pass for
+	// nothing. Only services that use the dependency (their uses: list) are
+	// checked against it; the check runs one of the experiment's own triggers.
 	for _, f := range r.exp.Faults {
-		for _, svc := range r.servicesOfTriggers() {
-			rc, err := r.a.VerifyRoute(ctx, f.Dependency, svc, r.verifyCommand(svc))
-			switch {
-			case errors.Is(err, ErrNoTrigger):
-				r.event("system", fmt.Sprintf("Couldn't verify that %s reaches %s through the proxy: it has no health check or command to run", svc, f.Dependency), nil)
-				continue
-			case err != nil:
+		users := r.servicesUsing(f.Dependency)
+		if len(users) == 0 {
+			r.event("system", fmt.Sprintf("No service in this experiment uses %s (by their uses: lists), so no route check against it. Breaking it may test nothing.", f.Dependency), nil)
+			continue
+		}
+		for _, svc := range users {
+			probe, _ := r.exp.ProbeTrigger(svc) // svc is a trigger's service, so there is one
+			rc, err := r.a.verifyRouteWith(ctx, f.Dependency, probe)
+			if err != nil {
 				return fmt.Sprintf("verifying that %s reaches %s through the proxy: %v", svc, f.Dependency, err)
 			}
 			r.event("system", "Route check: "+rc.Detail, rc)
@@ -555,15 +566,15 @@ func (r *runner) preflight(ctx context.Context) string {
 	return ""
 }
 
-// verifyCommand picks the request the route check runs for a service: one
-// the experiment itself uses, so it's known to exercise the service.
-func (r *runner) verifyCommand(service string) string {
-	for _, t := range r.exp.Triggers {
-		if t.Command != "" && t.ServiceOf() == service {
-			return t.CommandName()
+// servicesUsing is the experiment's trigger services that use the dependency.
+func (r *runner) servicesUsing(dependency string) []string {
+	var out []string
+	for _, svc := range r.servicesOfTriggers() {
+		if slices.Contains(r.snap.Services[svc].Uses, dependency) {
+			out = append(out, svc)
 		}
 	}
-	return "" // its health check
+	return out
 }
 
 func (r *runner) servicesOfTriggers() []string {
@@ -764,24 +775,33 @@ func (r *runner) fire(ctx context.Context, t config.Trigger, attempt int) (res r
 		return res
 	}
 
-	req := t.Request
-	var body io.Reader
-	switch b := req.Body.(type) {
-	case nil:
-	case string:
-		body = strings.NewReader(b)
-	default:
-		j, err := json.Marshal(b)
-		if err != nil {
-			res.Error = "encoding the body: " + err.Error()
-			return res
-		}
-		body = bytes.NewReader(j)
-	}
-	hr, err := http.NewRequestWithContext(ctx, req.Method, strings.TrimRight(svc.BaseURL, "/")+req.Path, body)
+	status, body, err := sendRequest(ctx, svc.BaseURL, *t.Request)
 	if err != nil {
 		res.Error = err.Error()
 		return res
+	}
+	res.Status, res.Body = status, tail(body)
+	return res
+}
+
+// sendRequest sends a trigger's HTTP request to the service at baseURL; the
+// body is sent as JSON, or as is when it's a string.
+func sendRequest(ctx context.Context, baseURL string, req config.Request) (status int, body string, err error) {
+	var reqBody io.Reader
+	switch b := req.Body.(type) {
+	case nil:
+	case string:
+		reqBody = strings.NewReader(b)
+	default:
+		j, err := json.Marshal(b)
+		if err != nil {
+			return 0, "", fmt.Errorf("encoding the body: %w", err)
+		}
+		reqBody = bytes.NewReader(j)
+	}
+	hr, err := http.NewRequestWithContext(ctx, req.Method, strings.TrimRight(baseURL, "/")+req.Path, reqBody)
+	if err != nil {
+		return 0, "", err
 	}
 	if _, isString := req.Body.(string); req.Body != nil && !isString {
 		hr.Header.Set("Content-Type", "application/json")
@@ -791,13 +811,11 @@ func (r *runner) fire(ctx context.Context, t config.Trigger, attempt int) (res r
 	}
 	resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(hr)
 	if err != nil {
-		res.Error = err.Error()
-		return res
+		return 0, "", err
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	res.Status, res.Body = resp.StatusCode, tail(string(b))
-	return res
+	return resp.StatusCode, string(b), nil
 }
 
 // watchRecovery checks each recovery assertion's service until its health

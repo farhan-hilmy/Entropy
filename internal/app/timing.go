@@ -117,18 +117,30 @@ func (a *App) experimentTiming(ctx context.Context, e config.Experiment, svcs []
 	a.mu.RUnlock()
 
 	health := map[string]string{} // service -> the request key of its health command
+	uses := map[string][]string{} // service -> the dependencies it uses
 	for _, svc := range svcs {
 		if hc, ok := healthCommand(svc); ok {
 			health[svc.Name] = svc.Name + "/" + hc.Name
 		}
+		uses[svc.Name] = svc.Uses
 	}
-	return assessTiming(e, s, health)
+	return assessTiming(e, s, health, uses)
 }
 
-// assessTiming is the check itself; health maps a service to its health
-// command's request key, for recovery assertions.
-func assessTiming(e config.Experiment, s map[string]samples, health map[string]string) Timing {
+// assessTiming is the check itself. health maps a service to its health
+// command's request key, for recovery assertions; uses maps a service to the
+// dependencies it uses, for the preflight's route checks (nil: unknown, so
+// every service counts as using every faulted dependency).
+func assessTiming(e config.Experiment, s map[string]samples, health map[string]string, uses map[string][]string) Timing {
 	t := Timing{Measured: "full", Warnings: []string{}}
+	if uses != nil {
+		for _, f := range e.Faults {
+			if len(routePairs(e, f.Dependency, uses)) == 0 {
+				t.Warnings = append(t.Warnings, fmt.Sprintf("no service this experiment sends to uses %s (by their uses: lists), so breaking it may test nothing, and preflight won't check that anything goes through its proxy. Add %s to the right service's uses:, or remove the fault.",
+					f.Dependency, f.Dependency))
+			}
+		}
+	}
 	var unmeasured, lowerBound []string
 	note := func(level string, trig config.Trigger, list *[]string) {
 		*list = append(*list, fmt.Sprintf("%s (%s)", trig.Name, requestKey(trig)))
@@ -216,7 +228,7 @@ func assessTiming(e config.Experiment, s map[string]samples, health map[string]s
 		}
 	}
 
-	if w := totalWarning(e, s, health); w != "" {
+	if w := totalWarning(e, s, uses); w != "" {
 		t.Warnings = append(t.Warnings, w)
 	}
 
@@ -235,7 +247,7 @@ func assessTiming(e config.Experiment, s map[string]samples, health map[string]s
 // typical ones, and no made-up margin; it says how many measurements they
 // come from. Without measured preflight or baseline requests it says nothing:
 // config validation already rejects faults + window alone being too long.
-func totalWarning(e config.Experiment, s map[string]samples, health map[string]string) string {
+func totalWarning(e config.Experiment, s map[string]samples, uses map[string][]string) string {
 	fewest := 0 // the fewest measurements behind any of the estimates
 	slowest := func(key string) (time.Duration, bool) {
 		ds := s[key].normal // preflight and baseline run without a fault
@@ -251,12 +263,16 @@ func totalWarning(e config.Experiment, s map[string]samples, health map[string]s
 		return slices.Max(ds), true
 	}
 
-	// Per faulted dependency and service, the route check runs a request twice,
-	// the second time with routeProbeLatency added (see runner.verifyCommand).
+	// For each faulted dependency and each service that uses it, the route
+	// check runs the service's probe trigger twice, the second time with
+	// routeProbeLatency added (see runner.preflight).
 	var preflight time.Duration
-	for _, svc := range triggerServices(e) {
-		if d, ok := slowest(verifyKey(e, svc, health)); ok && len(e.Faults) > 0 {
-			preflight += time.Duration(len(e.Faults)) * (2*d + routeProbeLatency)
+	for _, f := range e.Faults {
+		for _, svc := range routePairs(e, f.Dependency, uses) {
+			probe, _ := e.ProbeTrigger(svc)
+			if d, ok := slowest(requestKey(probe)); ok {
+				preflight += 2*d + routeProbeLatency
+			}
 		}
 	}
 	var baseline time.Duration
@@ -279,24 +295,17 @@ func totalWarning(e config.Experiment, s map[string]samples, health map[string]s
 		fewest, roundSec(preflight), roundSec(baseline), e.FaultsEndSec(), e.RecoveryWindowSec, roundSec(total), e.MaxDurationSec, int(math.Ceil(total.Seconds())))
 }
 
-// verifyKey is the request the preflight's route check runs for a service:
-// one of the experiment's commands for it, else its health command ("" for an
-// HTTP health check, which isn't measured).
-func verifyKey(e config.Experiment, service string, health map[string]string) string {
-	for _, t := range e.Triggers {
-		if t.Command != "" && t.ServiceOf() == service {
-			return t.Command
-		}
-	}
-	return health[service]
-}
-
-func triggerServices(e config.Experiment) []string {
+// routePairs is the experiment's trigger services that the preflight
+// route-checks against the dependency: those that use it, as runner.preflight
+// does; with uses unknown (nil), all of them.
+func routePairs(e config.Experiment, dependency string, uses map[string][]string) []string {
 	var out []string
 	for _, t := range e.Triggers {
-		if s := t.ServiceOf(); !slices.Contains(out, s) {
-			out = append(out, s)
+		s := t.ServiceOf()
+		if slices.Contains(out, s) || (uses != nil && !slices.Contains(uses[s], dependency)) {
+			continue
 		}
+		out = append(out, s)
 	}
 	return out
 }

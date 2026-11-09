@@ -22,6 +22,29 @@ type Experiment struct {
 	// are removed; the "after" triggers run in it.
 	RecoveryWindowSec int         `yaml:"recoveryWindowSec,omitempty" json:"recoveryWindowSec"`
 	Assertions        []Assertion `yaml:"assertions" json:"assertions"`
+	// VerifyWith names, per service, the trigger the preflight's route check
+	// runs to see that the service goes through the proxy. By default it's the
+	// service's first trigger; set it when that one doesn't use the dependency.
+	VerifyWith map[string]string `yaml:"verifyWith,omitempty" json:"verifyWith,omitempty"`
+}
+
+// ProbeTrigger is the trigger the route check runs for a service: the one
+// VerifyWith names, else the service's first trigger. ok is false if the
+// experiment sends nothing to the service.
+func (e Experiment) ProbeTrigger(service string) (Trigger, bool) {
+	if name, set := e.VerifyWith[service]; set {
+		for _, t := range e.Triggers {
+			if t.Name == name {
+				return t, true
+			}
+		}
+	}
+	for _, t := range e.Triggers {
+		if t.ServiceOf() == service {
+			return t, true
+		}
+	}
+	return Trigger{}, false
 }
 
 // ExperimentFault is a fault from the Fault panel, started StartOffsetSec
@@ -219,6 +242,16 @@ func (v *validator) experiment(position string, e Experiment, seen, deps map[str
 		v.trigger(tl, t, triggers, services)
 		if t.Name != "" {
 			triggers[t.Name] = t
+		}
+	}
+
+	for svc, name := range e.VerifyWith {
+		t, known := triggers[name]
+		switch {
+		case !known:
+			v.bad("%s: verifyWith %s: trigger %q: no such trigger in this experiment", label, svc, name)
+		case t.ServiceOf() != svc:
+			v.bad("%s: verifyWith %s: trigger %s sends to %s, not %s", label, svc, name, t.ServiceOf(), svc)
 		}
 	}
 
