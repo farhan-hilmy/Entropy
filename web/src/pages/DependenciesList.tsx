@@ -26,7 +26,7 @@ export function DependenciesList({ env, onChanged }: { env: Environment; onChang
         {!add.form && <button className="btn" onClick={add.open} disabled={add.busy}>+ Add dependency</button>}
       </div>
       {add.error && !add.form && <div className="banner error">{add.error}</div>}
-      {add.form && <AddDependency f={add} />}
+      {add.form && <AddDependency f={add} builtin={env.toxiproxy.builtin} />}
       <input className="search" placeholder="Search dependencies…" value={query} onChange={(e) => setQuery(e.target.value)} />
       <table>
         <thead>
@@ -55,7 +55,7 @@ export function DependenciesList({ env, onChanged }: { env: Environment; onChang
   )
 }
 
-function AddDependency({ f }: { f: ConfigForm<NewDependency> }) {
+function AddDependency({ f, builtin }: { f: ConfigForm<NewDependency>; builtin: boolean }) {
   const form = f.form!
   const port = form.address.includes(':') ? form.address.split(':').pop() || '<port>' : '<port>'
   return (
@@ -77,15 +77,20 @@ function AddDependency({ f }: { f: ConfigForm<NewDependency> }) {
           <TextInput value={form.upstream} placeholder="mongodb:27017" onChange={(upstream) => f.update({ upstream })} />
         </Field>
         <Field label="Proxy listens on" hint="Leave empty for the default.">
-          <TextInput value={form.listen} placeholder={`0.0.0.0:${port}`} onChange={(listen) => f.update({ listen })} />
+          <TextInput value={form.listen} placeholder={`${builtin ? '127.0.0.1' : '0.0.0.0'}:${port}`} onChange={(listen) => f.update({ listen })} />
         </Field>
-        <div className="banner warn">
-          <div className="small">
-            Toxiproxy must also publish this port, or the dependency stays Unreachable. Entropy can't do that for you:
-            add it to the <code>toxiproxy</code> service in your compose file and restart the container.
-            <pre className="cmdline">{`  toxiproxy:\n    ports:\n      - "${port}:${port}"`}</pre>
+        {builtin ? (
+          <p className="muted small">The built-in Toxiproxy opens this port on this machine when you save.</p>
+        ) : (
+          <div className="banner warn">
+            <div className="small">
+              Your Toxiproxy must also publish this port, or the dependency stays Unreachable. Entropy can't do that for you:
+              add it to the <code>toxiproxy</code> service in your compose file and restart the container.
+              Or leave the Toxiproxy API empty under Environment settings to use the built-in one, which needs no compose edit.
+              <pre className="cmdline">{`  toxiproxy:\n    ports:\n      - "${port}:${port}"`}</pre>
+            </div>
           </div>
-        </div>
+        )}
       </div>
       <SaveButtons f={f} label="Add dependency" />
     </section>

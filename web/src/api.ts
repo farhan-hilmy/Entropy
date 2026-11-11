@@ -183,6 +183,8 @@ export interface Environment {
   toxiproxy: {
     api: string
     status: Status
+    // builtin: Entropy runs Toxiproxy itself, as entropy.yaml names no toxiproxy.api.
+    builtin: boolean
     // auto: toxiproxy.api's host is "auto"; detected is the host found, absent while none answers.
     auto: boolean
     detected?: { host: string; source: string }

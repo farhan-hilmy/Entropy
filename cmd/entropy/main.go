@@ -20,6 +20,7 @@ import (
 	"entropy/internal/command"
 	"entropy/internal/config"
 	"entropy/internal/server"
+	"entropy/internal/toxiproxy"
 	"entropy/internal/store"
 	"entropy/web"
 )
@@ -126,7 +127,20 @@ func up(args []string) error {
 	}
 	defer st.Close()
 
+	// Always started, so removing toxiproxy.api takes effect on the next Sync
+	// without a restart. Idle and loopback-only while an external one is used.
+	builtin, err := toxiproxy.StartBuiltin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := builtin.Close(); err != nil {
+			log.Warn("could not stop the built-in Toxiproxy cleanly", "err", err)
+		}
+	}()
+
 	a := app.New(*configPath, st, log)
+	a.UseBuiltin(builtin)
 	res := a.Sync(ctx)
 	if res.Error != "" {
 		return fmt.Errorf("sync failed: %s", res.Error)

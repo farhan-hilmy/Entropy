@@ -57,9 +57,18 @@ type App struct {
 	editMu     sync.Mutex // one config edit at a time, so each one's hash check holds
 	faults     *faults.Engine
 
+	// builtin is the Toxiproxy inside Entropy, used when the config names no
+	// toxiproxy.api; nil if it wasn't started (see UseBuiltin).
+	builtin *toxiproxy.Builtin
+
 	mu       sync.RWMutex
 	tp       *toxiproxy.Client
 	tpStatus Status
+	// usingBuiltin: the last sync pointed tp at the built-in Toxiproxy.
+	usingBuiltin bool
+	// proxyErrs holds, by dependency, why its proxy couldn't be created in
+	// the last check round, e.g. its port is taken.
+	proxyErrs map[string]string
 	deps     map[string]Status
 	services map[string]Status
 	lastSync SyncResult
@@ -98,7 +107,7 @@ func New(configPath string, st *store.Store, log *slog.Logger) *App {
 		store:      st,
 		log:        log,
 		kick:       make(chan struct{}, 1),
-		tp:         toxiproxy.New(config.DefaultToxiproxyAPI),
+		tp:         toxiproxy.New(""), // set by Sync
 		tpStatus:   Status{State: NotChecked},
 		deps:       map[string]Status{},
 		services:   map[string]Status{},
@@ -109,6 +118,10 @@ func New(configPath string, st *store.Store, log *slog.Logger) *App {
 	a.faults.OnRemoved = func(string) { a.CheckSoon() }
 	return a
 }
+
+// UseBuiltin gives the app the built-in Toxiproxy, which Sync uses whenever
+// the config names no toxiproxy.api. Call it before the first Sync.
+func (a *App) UseBuiltin(b *toxiproxy.Builtin) { a.builtin = b }
 
 // Sync reloads the config file, reconciles it into the store and makes sure
 // every dependency has a proxy in Toxiproxy. An invalid file changes nothing.
@@ -126,6 +139,10 @@ func (a *App) Sync(ctx context.Context) SyncResult {
 		res.Error = err.Error()
 		return res
 	}
+	if cfg.Builtin() && a.builtin == nil {
+		res.Error = "toxiproxy.api is not set and the built-in Toxiproxy isn't running; set toxiproxy.api to use another Toxiproxy"
+		return res
+	}
 	if w := a.resolveHost(ctx, cfg); w != "" {
 		res.Warnings = append(res.Warnings, w)
 	}
@@ -137,9 +154,18 @@ func (a *App) Sync(ctx context.Context) SyncResult {
 	res.Summary = &sum
 	res.Warnings = append(res.Warnings, a.timingWarnings(ctx, cfg.Experiments)...)
 
-	tp := toxiproxy.New(cfg.Toxiproxy.API)
+	api := cfg.Toxiproxy.API
+	if cfg.Builtin() {
+		api = a.builtin.URL()
+	} else if a.builtin != nil {
+		// Switched to an external Toxiproxy: free the ports the built-in one
+		// held, which a container on localhost may need.
+		a.builtin.Reset()
+	}
+	tp := toxiproxy.New(api)
 	a.mu.Lock()
 	a.tp = tp
+	a.usingBuiltin = cfg.Builtin()
 	a.mu.Unlock()
 	res.Warnings = append(res.Warnings, ensureProxies(ctx, tp, cfg.Dependencies)...)
 
@@ -156,7 +182,11 @@ func (a *App) Sync(ctx context.Context) SyncResult {
 func (a *App) resolveHost(ctx context.Context, cfg *config.Config) (warning string) {
 	port, auto := cfg.AutoAPIPort()
 	if !auto {
-		cfg.SetContainerHost(cfg.APIHost())
+		host := cfg.APIHost()
+		if cfg.Builtin() {
+			host = config.BuiltinHost // the built-in proxies run on this machine
+		}
+		cfg.SetContainerHost(host)
 		a.mu.Lock()
 		a.autoPort, a.host = "", nil
 		a.mu.Unlock()
@@ -221,10 +251,20 @@ func ensureProxies(ctx context.Context, tp *toxiproxy.Client, deps []config.Depe
 			continue
 		}
 		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("proxy for %s: %v", d.Name, err))
+			warnings = append(warnings, fmt.Sprintf("proxy for %s: %s", d.Name, proxyProblem(d.Listen, err)))
 		}
 	}
 	return warnings
+}
+
+// proxyProblem explains why a proxy couldn't be created or changed.
+func proxyProblem(listen string, err error) string {
+	if toxiproxy.IsPortInUse(err) {
+		_, port, _ := net.SplitHostPort(listen)
+		return fmt.Sprintf("port %s is already in use by another program, so the proxy can't listen there. "+
+			"If a Toxiproxy container still publishes it, stop that container; or set listen: to a free port", port)
+	}
+	return err.Error()
 }
 
 // sameListen treats all wildcard hosts as equal: Toxiproxy reports a proxy
@@ -293,6 +333,9 @@ func (a *App) checkAll(ctx context.Context) {
 		a.faults.Reapply(ctx, proxies)
 	}
 	a.redetect(ctx, tpErr != nil)
+	a.mu.RLock()
+	proxyErrs := a.proxyErrs
+	a.mu.RUnlock()
 
 	var mu sync.Mutex
 	depStatus := map[string]Status{}
@@ -309,7 +352,7 @@ func (a *App) checkAll(ctx context.Context) {
 			if a.isVerifying(d.Name) {
 				st = a.lastDepStatus(d.Name) // its check would add to the traffic being measured
 			} else {
-				st = checkDependency(ctx, d, proxies, tpErr)
+				st = checkDependency(ctx, d, proxies, tpErr, proxyErrs[d.Name])
 			}
 			mu.Lock()
 			depStatus[d.Name] = st
@@ -351,28 +394,42 @@ func (a *App) restoreProxies(ctx context.Context, tp *toxiproxy.Client, deps []s
 	if proxies == nil {
 		proxies = map[string]toxiproxy.Proxy{}
 	}
+	a.mu.RLock()
+	before := a.proxyErrs
+	a.mu.RUnlock()
+	errs := map[string]string{}
 	for _, d := range deps {
 		if _, ok := proxies[d.Name]; ok || d.Missing {
 			continue
 		}
 		p := toxiproxy.Proxy{Name: d.Name, Listen: d.Listen, Upstream: d.Upstream, Enabled: true}
 		if err := tp.CreateProxy(ctx, p); err != nil {
-			a.log.Warn("could not recreate missing proxy", "dependency", d.Name, "err", err)
+			errs[d.Name] = proxyProblem(d.Listen, err)
+			if errs[d.Name] != before[d.Name] { // it's retried every round; log each problem once
+				a.log.Warn("could not create proxy", "dependency", d.Name, "err", errs[d.Name])
+			}
 			continue
 		}
-		a.log.Info("recreated missing proxy; Toxiproxy was probably restarted", "dependency", d.Name)
+		a.log.Info("created missing proxy; Toxiproxy was probably restarted", "dependency", d.Name)
 		proxies[d.Name] = p
 	}
+	a.mu.Lock()
+	a.proxyErrs = errs
+	a.mu.Unlock()
 	return proxies
 }
 
-func checkDependency(ctx context.Context, d store.Dependency, proxies map[string]toxiproxy.Proxy, tpErr error) Status {
+// checkDependency reports d's status. proxyErr is why its proxy couldn't be
+// created, if it couldn't.
+func checkDependency(ctx context.Context, d store.Dependency, proxies map[string]toxiproxy.Proxy, tpErr error, proxyErr string) Status {
 	now := time.Now().UTC()
 	if tpErr != nil {
 		return Status{State: Unreachable, Detail: "Toxiproxy is not reachable", CheckedAt: now}
 	}
 	p, ok := proxies[d.Name]
 	switch {
+	case !ok && proxyErr != "":
+		return Status{State: Unreachable, Detail: "no proxy: " + proxyErr, CheckedAt: now}
 	case !ok:
 		return Status{State: Unreachable, Detail: "no proxy in Toxiproxy — run Sync", CheckedAt: now}
 	case !p.Enabled:
@@ -406,6 +463,8 @@ type View struct {
 type ToxiproxyView struct {
 	API    string `json:"api"`
 	Status Status `json:"status"`
+	// Builtin: Entropy runs Toxiproxy itself, as the config names no toxiproxy.api.
+	Builtin bool `json:"builtin"`
 	// Auto: toxiproxy.api's host is auto. Detected is the host found then,
 	// nil while none answers.
 	Auto     bool                     `json:"auto"`
@@ -457,7 +516,7 @@ func (a *App) View(ctx context.Context) (View, error) {
 	cmdHealth := maps.Clone(a.cmdHealth)
 	running := maps.Clone(a.running)
 	tpStatus := a.tpStatus
-	tpView := ToxiproxyView{API: a.tp.Base(), Status: tpStatus, Auto: a.autoPort != "", Detected: a.host}
+	tpView := ToxiproxyView{API: a.tp.Base(), Status: tpStatus, Builtin: a.usingBuiltin, Auto: a.autoPort != "", Detected: a.host}
 	lastSync := a.lastSync
 	a.mu.RUnlock()
 

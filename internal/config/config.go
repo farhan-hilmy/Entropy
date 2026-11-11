@@ -21,7 +21,10 @@ import (
 // Kinds are the dependency types Entropy knows how to check.
 var Kinds = []string{"redis", "mongodb", "postgres", "rabbitmq", "http", "https"}
 
-const DefaultToxiproxyAPI = "http://localhost:8474"
+// BuiltinHost is where the built-in Toxiproxy's proxies listen by default,
+// and what auto in a dependency address means without a toxiproxy.api:
+// loopback, so nothing is exposed on the network.
+const BuiltinHost = "127.0.0.1"
 
 // AutoHost as the host of toxiproxy.api or of a dependency address stands for
 // the container host, which Entropy detects on every sync, e.g. http://auto:8474.
@@ -42,6 +45,8 @@ type Environment struct {
 }
 
 type Toxiproxy struct {
+	// API is an external Toxiproxy, e.g. one in a container. Empty means the
+	// one built into Entropy.
 	API string `yaml:"api" json:"api"`
 }
 
@@ -53,8 +58,9 @@ type Dependency struct {
 	Address string `yaml:"address" json:"address"`
 	// Upstream is the real dependency as Toxiproxy sees it, e.g. redis:6379.
 	Upstream string `yaml:"upstream" json:"upstream"`
-	// Listen is the proxy's listen address inside Toxiproxy.
-	// Defaults to 0.0.0.0 with the port from Address.
+	// Listen is the proxy's listen address inside Toxiproxy. Defaults to the
+	// port from Address on 127.0.0.1 with the built-in Toxiproxy, and on
+	// 0.0.0.0 with an external one (inside its container).
 	Listen string `yaml:"listen" json:"listen"`
 	// Redirect (https only) means the hostname is pointed at Toxiproxy through
 	// the hosts file, so the check also verifies it resolves to loopback.
@@ -136,14 +142,15 @@ func (c *Config) applyDefaults(dir string) {
 	if c.Environment.Name == "" {
 		c.Environment.Name = "local"
 	}
-	if c.Toxiproxy.API == "" {
-		c.Toxiproxy.API = DefaultToxiproxyAPI
+	listenHost := "0.0.0.0"
+	if c.Builtin() {
+		listenHost = BuiltinHost
 	}
 	for i := range c.Dependencies {
 		d := &c.Dependencies[i]
 		if d.Listen == "" {
 			if _, port, err := net.SplitHostPort(d.Address); err == nil {
-				d.Listen = net.JoinHostPort("0.0.0.0", port)
+				d.Listen = net.JoinHostPort(listenHost, port)
 			}
 		}
 	}
@@ -173,8 +180,10 @@ func (c *Config) applyDefaults(dir string) {
 // Validate reports every problem in the config, not just the first one.
 func (c *Config) Validate() error {
 	v := &validator{}
-	if u, err := url.Parse(c.Toxiproxy.API); err != nil || u.Scheme == "" || u.Host == "" {
-		v.bad("toxiproxy.api: %q is not a URL", c.Toxiproxy.API)
+	if c.Toxiproxy.API != "" {
+		if u, err := url.Parse(c.Toxiproxy.API); err != nil || u.Scheme == "" || u.Host == "" {
+			v.bad("toxiproxy.api: %q is not a URL", c.Toxiproxy.API)
+		}
 	}
 	deps := map[string]bool{}
 	for i, d := range c.Dependencies {
@@ -301,6 +310,10 @@ func hostOf(hostport string) string {
 	host, _, _ := net.SplitHostPort(hostport)
 	return host
 }
+
+// Builtin reports whether the config uses the Toxiproxy built into Entropy,
+// which it does unless toxiproxy.api names another one.
+func (c *Config) Builtin() bool { return c.Toxiproxy.API == "" }
 
 // AutoAPIPort returns the port of toxiproxy.api when its host is AutoHost,
 // and ok false when the API has an explicit host.

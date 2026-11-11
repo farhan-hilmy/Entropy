@@ -50,7 +50,7 @@ export function Overview({ env, onSynced }: { env: Environment; onSynced: () => 
 
       {syncError && <div className="banner error">Sync failed: {syncError}</div>}
       {result && <SyncReport result={result} onDismiss={() => setResult(null)} />}
-      {env.toxiproxy.status.state === 'unreachable' && (
+      {env.toxiproxy.status.state === 'unreachable' && !env.toxiproxy.builtin && (
         <div className="banner error">
           <span>
             Toxiproxy is not reachable at <code>{env.toxiproxy.api}</code>.{' '}
@@ -69,14 +69,20 @@ export function Overview({ env, onSynced }: { env: Environment; onSynced: () => 
             <Field label="Environment name" hint="Leave empty for the default, local.">
               <TextInput value={edit.form.name} placeholder="local" onChange={(name) => edit.update({ name })} />
             </Field>
-            <Field label="Toxiproxy API" hint="Leave empty for the default. Use http://auto:8474 to detect the container host on every sync; dependency addresses can use auto too.">
-              <TextInput value={edit.form.toxiproxyApi} placeholder="http://localhost:8474" onChange={(toxiproxyApi) => edit.update({ toxiproxyApi })} />
+            <Field label="Toxiproxy API" hint="Leave empty to use the Toxiproxy built into Entropy. Set it to use one you run yourself, e.g. in Docker or Podman: http://auto:8474 detects the container host on every sync, and dependency addresses can use auto too.">
+              <TextInput value={edit.form.toxiproxyApi} placeholder="built-in" onChange={(toxiproxyApi) => edit.update({ toxiproxyApi })} />
             </Field>
           </div>
         ) : (
           <dl className="facts">
             <dt>Environment name</dt><dd>{env.name}</dd>
-            <dt>Toxiproxy API</dt><dd><code>{env.toxiproxy.api}</code> <StatusLabel status={env.toxiproxy.status} /></dd>
+            <dt>Toxiproxy</dt>
+            <dd>
+              {env.toxiproxy.builtin
+                ? <>built-in <span className="muted small">runs inside Entropy; proxies listen on this machine</span></>
+                : <code>{env.toxiproxy.api}</code>}{' '}
+              <StatusLabel status={env.toxiproxy.status} />
+            </dd>
             {env.toxiproxy.auto && (
               <>
                 <dt>Container host</dt>

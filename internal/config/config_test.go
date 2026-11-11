@@ -41,11 +41,42 @@ services:
 	if cfg.Environment.Name != "local" {
 		t.Errorf("environment name = %q, want local", cfg.Environment.Name)
 	}
-	if cfg.Toxiproxy.API != DefaultToxiproxyAPI {
-		t.Errorf("toxiproxy api = %q", cfg.Toxiproxy.API)
+	if !cfg.Builtin() {
+		t.Errorf("no toxiproxy.api should mean the built-in Toxiproxy, got api %q", cfg.Toxiproxy.API)
 	}
+	// The built-in proxies run on this machine: loopback only by default.
+	if got := cfg.Dependencies[0].Listen; got != "127.0.0.1:6379" {
+		t.Errorf("listen = %q, want 127.0.0.1:6379", got)
+	}
+}
+
+func TestExternalToxiproxyListensOnAllInterfaces(t *testing.T) {
+	cfg, err := Load(write(t, `
+toxiproxy:
+  api: http://localhost:8474
+dependencies:
+  - name: redis
+    kind: redis
+    address: localhost:6379
+    upstream: redis:6379
+  - name: mongodb
+    kind: mongodb
+    address: localhost:27017
+    upstream: 10.0.0.5:27017
+    listen: 127.0.0.1:27017
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Builtin() {
+		t.Error("toxiproxy.api is set, but Builtin() is true")
+	}
+	// Inside a container, 0.0.0.0 is what lets published ports reach the proxy.
 	if got := cfg.Dependencies[0].Listen; got != "0.0.0.0:6379" {
 		t.Errorf("listen = %q, want 0.0.0.0:6379", got)
+	}
+	if got := cfg.Dependencies[1].Listen; got != "127.0.0.1:27017" {
+		t.Errorf("explicit listen changed to %q", got)
 	}
 }
 

@@ -104,6 +104,14 @@ func IsNotFound(err error) bool { return hasCode(err, http.StatusNotFound) }
 // IsConflict reports whether Toxiproxy answered 409, e.g. the toxic already exists.
 func IsConflict(err error) bool { return hasCode(err, http.StatusConflict) }
 
+// IsPortInUse reports whether Toxiproxy couldn't open a proxy's listen port,
+// e.g. "listen tcp 127.0.0.1:6379: bind: address already in use" (the text
+// after "bind:" depends on the OS).
+func IsPortInUse(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && strings.Contains(se.Body, "bind:")
+}
+
 func hasCode(err error, code int) bool {
 	var se *StatusError
 	return errors.As(err, &se) && se.Code == code
