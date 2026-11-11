@@ -1,13 +1,18 @@
-# Minimal stack for trying Entropy: Redis reachable only through Toxiproxy.
+# Minimal stack for trying Entropy: a Redis to break.
 #   podman compose -f examples/compose.yaml up -d     (or docker compose)
-# Entropy creates the "redis" proxy itself on startup.
+# Entropy runs Toxiproxy itself and puts a proxy on localhost:6379 in front
+# of this Redis. Your service connects to localhost:6379, never to 16379.
 services:
   redis:
     image: docker.io/library/redis:7.2
+    ports:
+      - "16379:6379" # the real Redis, for Entropy's proxy only (upstream: auto:16379)
 
+  # Only if you set toxiproxy.api in entropy.yaml to run Toxiproxy yourself
+  # (README, "Use your own Toxiproxy"). Start it with --profile toxiproxy.
   toxiproxy:
     image: ghcr.io/shopify/toxiproxy:2.12.0
+    profiles: [toxiproxy]
     ports:
       - "8474:8474" # Toxiproxy API
-      - "6379:6379" # redis proxy
-      # - "27017:27017" # mongodb proxy
+      - "6379:6379" # redis proxy; add a line per dependency

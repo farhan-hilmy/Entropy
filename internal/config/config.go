@@ -57,6 +57,8 @@ type Dependency struct {
 	// through the proxy, e.g. localhost:6379.
 	Address string `yaml:"address" json:"address"`
 	// Upstream is the real dependency as Toxiproxy sees it, e.g. redis:6379.
+	// With the built-in Toxiproxy, auto:<port> means the container host,
+	// for a dependency in a container with a published port.
 	Upstream string `yaml:"upstream" json:"upstream"`
 	// Listen is the proxy's listen address inside Toxiproxy. Defaults to the
 	// port from Address on 127.0.0.1 with the built-in Toxiproxy, and on
@@ -187,7 +189,7 @@ func (c *Config) Validate() error {
 	}
 	deps := map[string]bool{}
 	for i, d := range c.Dependencies {
-		v.dependency(fmt.Sprintf("dependencies[%d]", i), d, deps)
+		v.dependency(fmt.Sprintf("dependencies[%d]", i), d, deps, c.Builtin())
 	}
 	services := map[string]bool{}
 	byName := map[string]Service{}
@@ -224,7 +226,8 @@ func (v *validator) name(what, position, name string, seen map[string]bool) stri
 	return name
 }
 
-func (v *validator) dependency(position string, d Dependency, seen map[string]bool) {
+// dependency checks d; builtin is whether the config uses the built-in Toxiproxy.
+func (v *validator) dependency(position string, d Dependency, seen map[string]bool, builtin bool) {
 	label := v.name("dependency", position, d.Name, seen)
 	if !slices.Contains(Kinds, d.Kind) {
 		v.bad("%s: kind %q is not one of %s", label, d.Kind, strings.Join(Kinds, ", "))
@@ -234,6 +237,10 @@ func (v *validator) dependency(position string, d Dependency, seen map[string]bo
 	}
 	if !isHostPort(d.Upstream) {
 		v.bad("%s: upstream %q must be host:port", label, d.Upstream)
+	}
+	if hostOf(d.Upstream) == AutoHost && !builtin {
+		v.bad("%s: upstream can use %s only with the built-in Toxiproxy (no toxiproxy.api); "+
+			"an external Toxiproxy reaches the upstream from its own network, e.g. redis:6379", label, AutoHost)
 	}
 	// An empty listen only means the default couldn't be derived from a bad address, already reported.
 	if d.Listen != "" && !isHostPort(d.Listen) {
@@ -344,6 +351,29 @@ func (c *Config) SetContainerHost(host string) {
 		d := &c.Dependencies[i]
 		if h, port, err := net.SplitHostPort(d.Address); err == nil && h == AutoHost {
 			d.Address = net.JoinHostPort(host, port)
+		}
+	}
+}
+
+// AutoUpstreamPorts returns the ports of upstreams whose host is AutoHost
+// (built-in Toxiproxy only): containers whose published ports Entropy must
+// find, e.g. on the Podman VM's address.
+func (c *Config) AutoUpstreamPorts() []string {
+	var ports []string
+	for _, d := range c.Dependencies {
+		if h, port, err := net.SplitHostPort(d.Upstream); err == nil && h == AutoHost && !slices.Contains(ports, port) {
+			ports = append(ports, port)
+		}
+	}
+	return ports
+}
+
+// SetUpstreamHost replaces AutoHost in upstreams with host.
+func (c *Config) SetUpstreamHost(host string) {
+	for i := range c.Dependencies {
+		d := &c.Dependencies[i]
+		if h, port, err := net.SplitHostPort(d.Upstream); err == nil && h == AutoHost {
+			d.Upstream = net.JoinHostPort(host, port)
 		}
 	}
 }

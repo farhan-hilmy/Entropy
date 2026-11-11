@@ -1,22 +1,21 @@
 # Entropy config template. Copy it to entropy.yaml (which git ignores) and
 # fill in your own values:
 #   cp entropy.example.yaml entropy.yaml
-# This demo matches examples/compose.yaml (Redis behind Toxiproxy).
+# This demo matches examples/compose.yaml (a Redis on port 16379).
 
 environment:
   name: local
 
-# "auto" makes Entropy find the container host on every sync: localhost, or
-# e.g. the Podman VM's address on Windows (see README step 3). Write a host
-# instead (http://localhost:8474) to use exactly that one.
-toxiproxy:
-  api: http://auto:8474
+# Entropy runs Toxiproxy itself. To use one you run (in Docker, Podman, or
+# shared), set its API here instead; see README "Use your own Toxiproxy".
+# toxiproxy:
+#   api: http://auto:8474
 
 dependencies:
   - name: redis
     kind: redis
-    address: auto:6379        # services connect here (through the proxy); auto = the container host
-    upstream: redis:6379      # the real Redis, as Toxiproxy sees it
+    address: auto:6379        # services connect here, through the proxy; auto = this machine
+    upstream: auto:16379      # the real Redis; auto = where containers publish ports (found on every sync)
 
 services:
   # Replace with your own service. Until something answers on this URL it shows as Unreachable.

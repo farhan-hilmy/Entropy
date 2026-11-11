@@ -53,14 +53,10 @@ func depStatus(t *testing.T, a *App, name string) Status {
 	return Status{}
 }
 
-// The whole built-in flow: no toxiproxy block in entropy.yaml, and Entropy
-// alone gets dependencies Reachable through proxies it runs itself.
-func TestBuiltinToxiproxy(t *testing.T) {
-	ctx := context.Background()
-	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	t.Cleanup(upstream.Close)
-	real := strings.TrimPrefix(upstream.URL, "http://")
-
+// configFile returns a store and a config path in a fresh folder, and a
+// function that writes the config.
+func configFile(t *testing.T) (*store.Store, string, func(string)) {
+	t.Helper()
 	// Not t.TempDir: on Windows, a virus scanner can still hold the database
 	// file at cleanup, which fails the test. Leftovers here are harmless.
 	dir, err := os.MkdirTemp("", "entropy-builtin-test")
@@ -74,12 +70,56 @@ func TestBuiltinToxiproxy(t *testing.T) {
 	}
 	t.Cleanup(func() { st.Close() })
 	path := filepath.Join(dir, "entropy.yaml")
-	writeConfig := func(content string) {
+	return st, path, func(content string) {
 		t.Helper()
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
+}
+
+// With the built-in Toxiproxy, auto in an upstream is the container host:
+// where the dependency's published port answers.
+func TestBuiltinAutoUpstreamFindsTheContainerHost(t *testing.T) {
+	ctx := context.Background()
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(upstream.Close)
+	_, published, _ := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "http://"))
+
+	st, path, writeConfig := configFile(t)
+	a := New(path, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a.UseBuiltin(startBuiltin(t))
+	writeConfig(`
+dependencies:
+  - name: api
+    kind: http
+    address: auto:` + freePort(t) + `
+    upstream: auto:` + published + `
+`)
+	if res := a.Sync(ctx); res.Error != "" || len(res.Warnings) > 0 {
+		t.Fatalf("sync: error %q, warnings %q", res.Error, res.Warnings)
+	}
+	a.checkAll(ctx)
+	if s := depStatus(t, a, "api"); s.State != Reachable {
+		t.Fatalf("api through an auto upstream: %+v", s)
+	}
+	v, err := a.View(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Toxiproxy.Auto || v.Toxiproxy.Detected == nil {
+		t.Errorf("view doesn't show the detected container host: %+v", v.Toxiproxy)
+	}
+}
+
+// The whole built-in flow: no toxiproxy block in entropy.yaml, and Entropy
+// alone gets dependencies Reachable through proxies it runs itself.
+func TestBuiltinToxiproxy(t *testing.T) {
+	ctx := context.Background()
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(upstream.Close)
+	real := strings.TrimPrefix(upstream.URL, "http://")
+	st, path, writeConfig := configFile(t)
 	sync := func(a *App) {
 		t.Helper()
 		if res := a.Sync(ctx); res.Error != "" || len(res.Warnings) > 0 {

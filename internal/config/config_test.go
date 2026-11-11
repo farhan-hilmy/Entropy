@@ -50,6 +50,44 @@ services:
 	}
 }
 
+func TestAutoUpstream(t *testing.T) {
+	deps := `
+dependencies:
+  - name: redis
+    kind: redis
+    address: auto:6379
+    upstream: auto:16379
+  - name: cache
+    kind: redis
+    address: auto:6380
+    upstream: auto:16379
+  - name: mongodb
+    kind: mongodb
+    address: auto:27017
+    upstream: 10.0.0.5:27017
+`
+	cfg, err := Load(write(t, deps))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.AutoUpstreamPorts(); len(got) != 1 || got[0] != "16379" {
+		t.Errorf("AutoUpstreamPorts = %q, want [16379]", got)
+	}
+	cfg.SetUpstreamHost("172.28.142.159")
+	if got := cfg.Dependencies[0].Upstream; got != "172.28.142.159:16379" {
+		t.Errorf("auto upstream = %q", got)
+	}
+	if got := cfg.Dependencies[2].Upstream; got != "10.0.0.5:27017" {
+		t.Errorf("explicit upstream changed to %q", got)
+	}
+
+	// An external Toxiproxy reaches upstreams from its own network.
+	_, err = Load(write(t, "toxiproxy:\n  api: http://auto:8474\n"+deps))
+	if err == nil || !strings.Contains(err.Error(), "upstream can use auto only with the built-in Toxiproxy") {
+		t.Fatalf("expected auto upstream to be rejected with an external Toxiproxy, got %v", err)
+	}
+}
+
 func TestExternalToxiproxyListensOnAllInterfaces(t *testing.T) {
 	cfg, err := Load(write(t, `
 toxiproxy:

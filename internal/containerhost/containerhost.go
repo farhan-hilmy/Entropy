@@ -1,5 +1,6 @@
 // Package containerhost finds the host where the container runtime publishes
-// ports, by asking each likely host for Toxiproxy's version. It doesn't depend
+// ports, by asking each likely host for Toxiproxy's version, or by trying a
+// dependency's published port. It doesn't depend
 // on any one runtime: Docker Desktop, Podman, Colima and others publish on one
 // of these hosts.
 package containerhost
@@ -61,14 +62,36 @@ func hostFromURL(s string) string {
 // on port. All candidates are tried at once, so it takes at most probeTimeout,
 // and returns as soon as every earlier candidate has failed.
 func Find(ctx context.Context, port string, cands []Candidate) (Candidate, error) {
+	return find(ctx, cands, func(ctx context.Context, host string) bool {
+		return isToxiproxy(ctx, "http://"+net.JoinHostPort(host, port))
+	}, "Toxiproxy didn't answer on port "+port)
+}
+
+// FindPort returns the first candidate, in order, that accepts connections
+// on any of ports: where a container's published ports are reachable, e.g.
+// a dependency's for the built-in Toxiproxy.
+func FindPort(ctx context.Context, ports []string, cands []Candidate) (Candidate, error) {
+	return find(ctx, cands, func(ctx context.Context, host string) bool {
+		var d net.Dialer
+		for _, port := range ports {
+			if c, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, port)); err == nil {
+				c.Close()
+				return true
+			}
+		}
+		return false
+	}, "nothing answered on port "+strings.Join(ports, " or "))
+}
+
+func find(ctx context.Context, cands []Candidate, answers func(context.Context, string) bool, notFound string) (Candidate, error) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	answers := make([]chan bool, len(cands))
+	results := make([]chan bool, len(cands))
 	for i, c := range cands {
-		answers[i] = make(chan bool, 1)
-		go func() { answers[i] <- isToxiproxy(ctx, "http://"+net.JoinHostPort(c.Host, port)) }()
+		results[i] = make(chan bool, 1)
+		go func() { results[i] <- answers(ctx, c.Host) }()
 	}
-	for i, answered := range answers {
+	for i, answered := range results {
 		if <-answered {
 			return cands[i], nil
 		}
@@ -77,7 +100,7 @@ func Find(ctx context.Context, port string, cands []Candidate) (Candidate, error
 	for i, c := range cands {
 		tried[i] = fmt.Sprintf("%s (%s)", c.Host, c.Source)
 	}
-	return Candidate{}, errors.New("Toxiproxy didn't answer on port " + port + " at any of: " + strings.Join(tried, ", "))
+	return Candidate{}, errors.New(notFound + " at any of: " + strings.Join(tried, ", "))
 }
 
 func isToxiproxy(ctx context.Context, base string) bool {

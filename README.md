@@ -11,8 +11,12 @@ your service ──► Toxiproxy (proxy per dependency) ──► real dependenc
                   Entropy  (checks status, injects and clears faults)
 ```
 
-> **Current status:** environment setup, faults, experiments and runs (MVP
-> build steps 1, 2, 4 and 5). You can register dependencies and services, see
+Toxiproxy runs inside Entropy, so `entropy up` is all you start. You can
+also point Entropy at a Toxiproxy you run yourself, e.g. in a container
+([Use your own Toxiproxy](#use-your-own-toxiproxy)).
+
+> **Current status:** environment setup, faults, experiments, runs and the
+> built-in Toxiproxy (MVP build steps 1, 2, 4, 5 and 7). You can register dependencies and services, see
 > live statuses, apply a timed fault, verify a service goes through the proxy,
 > and run experiments from `entropy.yaml` that end with a verdict. The
 > experiment editor in the UI is not built yet: you write experiments in the file.
@@ -25,30 +29,21 @@ Install:
 
 - **Go** 1.26 or newer
 - **Node.js** 20 or newer
-- **Podman** (or Docker), with the Podman machine running:
-  `podman machine start`
+- **Podman** (or Docker), only for the demo Redis or other dependencies you
+  run in containers, with the Podman machine running: `podman machine start`
 
 ## 2. First run with the demo setup
 
-The demo runs Redis behind Toxiproxy and registers it in Entropy.
+The demo runs a Redis in a container, and Entropy puts its own proxy in
+front of it.
 
-**Step 1 – start Redis and Toxiproxy**
+**Step 1 – start Redis**
 
 ```sh
 podman compose -f examples/compose.yaml up -d
 ```
 
-or 
-
-```sh
-podman start examples-redis-1 examples-toxiproxy-1
-```
-
-if the containers already exists. Or if you make changes in compose, use this command:
-
-```sh
-podman compose -f examples/compose.yaml up -d --force-recreate toxiproxy
-```
+or, if the container already exists, `podman start examples-redis-1`.
 
 **Step 2 – create your config**
 
@@ -62,28 +57,32 @@ everyone.
 
 **Step 3 – the container host (usually nothing to do)**
 
-Container ports are published on the **container host**: `localhost` with
-Docker Desktop and most setups, but on Windows Podman usually publishes on
-the Podman VM's address (e.g. `172.28.142.159`). The template uses `auto`
-for it:
+The template has:
 
 ```yaml
-toxiproxy:
-  api: http://auto:8474
 dependencies:
   - name: redis
-    address: auto:6379
+    address: auto:6379     # the proxy: on this machine, 127.0.0.1:6379
+    upstream: auto:16379   # the real Redis, on the container host
 ```
 
-On every sync Entropy asks each likely host for Toxiproxy's version and uses
+Entropy's proxies run on this machine, so `auto` in `address` is
+`127.0.0.1`. Container ports, though, are published on the **container
+host**: `localhost` with Docker Desktop and most setups, but on Windows
+Podman usually publishes on the Podman VM's address (e.g.
+`172.28.142.159`), which can change after a reboot. So `auto` in `upstream`
+means the container host, found again on every sync.
+
+To find it, Entropy tries the upstream's port on each likely host and uses
 the first that answers: `localhost`, the host in `DOCKER_HOST` or
 `CONTAINER_HOST` (tcp:// or ssh://), then on Windows the WSL VM's address.
 It only asks WSL distributions that are already running, so it never starts
 your Podman machine. The Environment page shows the host it found, and
-Entropy's log says `container host detected host=… via=…`.
+Entropy's log says `container host detected host=… via=…`. If the
+containers start after Entropy, it finds them within about 15 s.
 
-If Toxiproxy runs somewhere else, write that host instead of `auto`, e.g.
-`api: http://10.0.0.5:8474`. A dependency's `auto` then means the API's host.
+A dependency that isn't in a container (e.g. a shared MongoDB) needs no
+`auto`: write its address, e.g. `upstream: 10.206.11.30:27017`.
 
 **Step 4 – build the UI** (only needed once, and after UI changes)
 
@@ -114,7 +113,8 @@ Redis should show **Reachable**. The demo service `oauth` shows
 **Unreachable** until something answers on `http://localhost:8000/health`.
 That's expected; replace it with your own service (section 3).
 
-Stop Entropy with `Ctrl+C`. It clears all faults on exit.
+Stop Entropy with `Ctrl+C`. It clears all faults and closes every proxy
+port on exit.
 
 ---
 
@@ -136,40 +136,66 @@ them on your machine. Removing something is also done in the file.
 
 ### Add a dependency
 
-You need three things for each dependency:
+You need two things for each dependency:
 
-1. **A proxy port on Toxiproxy.** Publish the port on the Toxiproxy
-   container, e.g. for MongoDB on 27017:
-
-   ```yaml
-   # compose file
-   toxiproxy:
-     image: ghcr.io/shopify/toxiproxy:2.12.0
-     ports:
-       - "8474:8474"
-       - "6379:6379"
-       - "27017:27017"   # new
-   ```
-
-2. **An entry in `entropy.yaml`:**
+1. **An entry in `entropy.yaml`:**
 
    ```yaml
    dependencies:
      - name: mongodb                  # also the proxy's name in Toxiproxy
        kind: mongodb                  # redis | mongodb | postgres | rabbitmq | http | https
-       address: auto:27017            # where your service connects: the proxy
-       upstream: mongodb:27017        # the real MongoDB, as Toxiproxy sees it
+       address: auto:27017            # where your service connects: the proxy (127.0.0.1:27017)
+       upstream: 10.206.11.30:27017   # the real MongoDB; auto:<port> if it's a container
    ```
 
-   Entropy creates the proxy itself when it syncs, and recreates it if
-   Toxiproxy restarts. You don't need to create it in Toxiproxy by hand.
+   Entropy opens the proxy's port when it syncs, so nothing else needs
+   changing: no compose file, no restart. By default the proxy listens on
+   `127.0.0.1` only; set `listen: 0.0.0.0:27017` if services on other
+   machines or in containers must reach it.
 
-3. **Your service pointed at the proxy.** Change your service's connection
-   setting (e.g. `MONGO_URI`) to the `address` above, **not** the real
-   MongoDB. With `auto`, use the container host shown on the Environment
-   page. If the service connects directly, faults have no effect on it.
-   To check, press **Verify** next to the service under *Used by services*
-   on the dependency's page (see [Verify that a service uses the proxy](#verify-that-a-service-uses-the-proxy)).
+2. **Your service pointed at the proxy.** Change your service's connection
+   setting (e.g. `MONGO_URI`) to the `address` above (`127.0.0.1:27017`),
+   **not** the real MongoDB. If the service connects directly, faults have
+   no effect on it. To check, press **Verify** next to the service under
+   *Used by services* on the dependency's page (see [Verify that a service uses the proxy](#verify-that-a-service-uses-the-proxy)).
+
+The proxy's port must be free on this machine. If something else holds it,
+e.g. a Toxiproxy container you used before, the dependency says *port … is
+already in use*: stop that program, or set `listen:` to another port.
+
+### Use your own Toxiproxy
+
+To use a Toxiproxy you run yourself, in Docker, Podman, or shared in an
+environment like alpha, set its API in `entropy.yaml` (or under **Settings**
+on the Environment page):
+
+```yaml
+toxiproxy:
+  api: http://auto:8474     # auto = the container host, detected on every sync
+```
+
+Entropy then works as before the built-in Toxiproxy existed:
+
+- **Ports:** each proxy port must be published on the Toxiproxy container:
+  add it under `ports:` in the compose file and recreate the container
+  (`podman compose -f examples/compose.yaml --profile toxiproxy up -d --force-recreate toxiproxy`;
+  `podman start` keeps the old ports). Entropy can't do that for you.
+- **`upstream`** is the dependency as that Toxiproxy sees it, e.g.
+  `redis:6379` on the compose network. `auto` isn't allowed there.
+- **`address: auto:<port>`** is the container host, and proxies listen on
+  `0.0.0.0` inside the container by default.
+- **Detection:** Entropy finds the container host by asking for Toxiproxy's
+  version on the API's port. For a Toxiproxy elsewhere, write its host
+  instead of `auto`, e.g. `api: http://10.0.0.5:8474`; a dependency's `auto`
+  then means that host.
+
+To switch back to the built-in one, remove `toxiproxy.api` (or empty it
+under Settings) and press Sync; stop the Toxiproxy container if it holds a
+port a proxy needs.
+
+> **Upgrading:** before the built-in Toxiproxy, an `entropy.yaml` without
+> `toxiproxy.api` meant `http://localhost:8474`. Such a config now uses the
+> built-in one. To keep your container, write `api: http://localhost:8474`.
 
 ### Add a service
 
@@ -317,7 +343,7 @@ for a fixed time (1 to 3600 seconds), then removes it:
   that fails (e.g. Toxiproxy is unreachable), it keeps retrying until it
   succeeds (after 2 s, then 4 s, 8 s… up to every 30 s), and the panel shows
   the error.
-- If Toxiproxy restarts (or is reset from outside Entropy) during a fault,
+- If your own Toxiproxy restarts (or is reset from outside Entropy) during a fault,
   Entropy puts the fault back within about 5 seconds, so it lasts its full
   duration.
 - The fault only affects services that connect through the proxy.
@@ -472,12 +498,13 @@ Toxiproxy answers.
 | Problem | Fix |
 |---|---|
 | `cannot listen on 127.0.0.1:7400` | Another program has the port. Use `go run ./cmd/entropy up -addr 127.0.0.1:7500`. |
-| Banner: *Toxiproxy is not reachable* | Start the containers (`podman compose … up -d`). With `auto`, Entropy finds Toxiproxy again within about 15 s; with a fixed host, check it's your container host (step 3) and press Sync. |
-| Sync warning: *Toxiproxy didn't answer on port 8474 at any of: …* | The containers aren't running, or Toxiproxy is on a host Entropy doesn't know. Start them, or write the host instead of `auto`. |
-| Everything Unreachable after a reboot | With a fixed host, the Podman VM address may have changed: switch to `auto` (step 3), or update the Toxiproxy address (Environment → Settings) and each dependency's address. |
-| Dependency Unreachable: *no reply to PING* (or similar) | Toxiproxy is up but the real dependency isn't. Check the container and `upstream`. |
-| Dependency Unreachable: *no proxy in Toxiproxy* | Entropy recreates missing proxies within about 5 s. If it persists, Entropy's log says why (e.g. the port is in use). |
-| New dependency stays Unreachable (or *dial tcp …: i/o timeout*) | Its port isn't published on the Toxiproxy container. Add it under `ports:` in the compose file and recreate the container: `podman compose -f examples/compose.yaml up -d --force-recreate toxiproxy`. `podman start` keeps the old ports. |
+| Dependency Unreachable: *no proxy: port … is already in use by another program* | Something else holds the proxy's port, often a Toxiproxy container you used before: `podman stop examples-toxiproxy-1`. Or set `listen:` to a free port (and point your service at it). Entropy retries every 5 s. |
+| Sync warning: *nothing answered on port 16379 at any of: …* | The container behind an `auto` upstream isn't running. Start it (`podman compose -f examples/compose.yaml up -d`); Entropy finds it within about 15 s. |
+| Dependency Unreachable: *no reply to PING* (or similar) | The proxy is up but the real dependency isn't. Check the container and `upstream`. |
+| Everything Unreachable after a reboot | A written-out container host (e.g. the Podman VM's address) may have changed: use `auto` instead (step 3), or update it and press Sync. |
+| *Own Toxiproxy* — banner: *Toxiproxy is not reachable* | Start the container (`podman compose … --profile toxiproxy up -d`). With `auto`, Entropy finds Toxiproxy again within about 15 s; with a fixed host, check it and press Sync. |
+| *Own Toxiproxy* — Sync warning: *Toxiproxy didn't answer on port 8474 at any of: …* | The container isn't running, or Toxiproxy is on a host Entropy doesn't know. Start it, or write the host instead of `auto`. |
+| *Own Toxiproxy* — new dependency stays Unreachable (or *dial tcp …: i/o timeout*) | Its port isn't published on the Toxiproxy container. Add it under `ports:` and recreate the container (see [Use your own Toxiproxy](#use-your-own-toxiproxy)). |
 | Save in the UI: *the config file changed since it was read* | The file was edited elsewhere meanwhile. Cancel, open Edit again, redo the change. |
 | *The UI is not built yet* | Run `npm install && npm run build` in `web/`, then restart Entropy. |
 | CIDM: *resolves to …, not 127.0.0.1* | The hosts-file line is missing or DNS is cached. Add it and run `ipconfig /flushdns`. |
@@ -522,8 +549,8 @@ cmd/entropy/        CLI: up, validate, run
 internal/config/    load and validate entropy.yaml; edit it in place for the UI
 internal/command/   run a command line with a timeout, kill its process tree
 internal/store/     SQLite: environment, dependencies, services, experiment versions, runs; sync reconcile
-internal/toxiproxy/ minimal Toxiproxy API client
-internal/containerhost/ find the container host for "auto" addresses
+internal/toxiproxy/ minimal Toxiproxy API client, and the built-in Toxiproxy server
+internal/containerhost/ find the container host for "auto" addresses and upstreams
 internal/faults/    apply faults through Toxiproxy, remove them when their time is up
 internal/checks/    protocol-level checks through the proxy
 internal/app/       sync, status monitor, faults, route checks, run engine, view for the UI

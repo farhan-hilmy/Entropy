@@ -77,7 +77,10 @@ type App struct {
 	// one. It's kept apart from services, which every check round replaces.
 	cmdHealth map[string]Status
 	// autoPort is toxiproxy.api's port when its host is auto, else "".
-	autoPort   string
+	autoPort string
+	// autoUpstreams are the ports of upstreams whose host is auto (built-in
+	// Toxiproxy only), probed to find the container host.
+	autoUpstreams []string
 	host       *containerhost.Candidate // the detected container host; nil if none answered
 	lastDetect time.Time
 	// leftoversPending: clearing leftover faults at startup failed, so the
@@ -180,15 +183,14 @@ func (a *App) Sync(ctx context.Context) SyncResult {
 // when toxiproxy.api is auto. When no host answers it falls back to localhost
 // and returns a warning; the check loop keeps looking (see redetect).
 func (a *App) resolveHost(ctx context.Context, cfg *config.Config) (warning string) {
+	if cfg.Builtin() {
+		return a.resolveBuiltinHosts(ctx, cfg)
+	}
 	port, auto := cfg.AutoAPIPort()
 	if !auto {
-		host := cfg.APIHost()
-		if cfg.Builtin() {
-			host = config.BuiltinHost // the built-in proxies run on this machine
-		}
-		cfg.SetContainerHost(host)
+		cfg.SetContainerHost(cfg.APIHost())
 		a.mu.Lock()
-		a.autoPort, a.host = "", nil
+		a.autoPort, a.autoUpstreams, a.host = "", nil, nil
 		a.mu.Unlock()
 		return ""
 	}
@@ -202,31 +204,63 @@ func (a *App) resolveHost(ctx context.Context, cfg *config.Config) (warning stri
 	}
 	cfg.SetContainerHost(host)
 	a.mu.Lock()
-	a.autoPort, a.host, a.lastDetect = port, found, time.Now()
+	a.autoPort, a.autoUpstreams, a.host, a.lastDetect = port, nil, found, time.Now()
 	a.mu.Unlock()
 	return warning
 }
 
-// redetect syncs again when Toxiproxy, at an auto-detected host, is
-// unreachable or wasn't found on the last sync, and turns up at another host
-// or at all: the containers may have started after Entropy, or the Podman
-// VM's address changed.
+// resolveBuiltinHosts does resolveHost for the built-in Toxiproxy. Its
+// proxies run on this machine, so auto in an address is loopback. auto in an
+// upstream is the container host: where a container's published port
+// answers, e.g. the Podman VM's address on Windows.
+func (a *App) resolveBuiltinHosts(ctx context.Context, cfg *config.Config) (warning string) {
+	cfg.SetContainerHost(config.BuiltinHost)
+	ports := cfg.AutoUpstreamPorts()
+	var found *containerhost.Candidate
+	if len(ports) > 0 {
+		host := "localhost"
+		if c, err := containerhost.FindPort(ctx, ports, containerhost.Candidates(ctx)); err != nil {
+			warning = err.Error() + ". Using localhost for auto upstreams; Entropy keeps looking until the containers answer."
+		} else {
+			found, host = &c, c.Host
+			a.log.Info("container host detected", "host", c.Host, "via", c.Source)
+		}
+		cfg.SetUpstreamHost(host)
+	}
+	a.mu.Lock()
+	a.autoPort, a.autoUpstreams, a.host, a.lastDetect = "", ports, found, time.Now()
+	a.mu.Unlock()
+	return warning
+}
+
+// redetect syncs again when the container host, which auto stands for, wasn't
+// found on the last sync and turns up, or when Toxiproxy at an auto-detected
+// host is unreachable and turns up at another host: the containers may have
+// started after Entropy, or the Podman VM's address changed.
 func (a *App) redetect(ctx context.Context, unreachable bool) {
 	a.mu.Lock()
-	due := a.autoPort != "" && (unreachable || a.host == nil) && time.Since(a.lastDetect) >= RedetectInterval
+	lost := a.autoPort != "" && (unreachable || a.host == nil)
+	upstreamsNotFound := len(a.autoUpstreams) > 0 && a.host == nil
+	due := (lost || upstreamsNotFound) && time.Since(a.lastDetect) >= RedetectInterval
 	if due {
 		a.lastDetect = time.Now()
 	}
-	port, current := a.autoPort, a.host
+	port, upstreams, current := a.autoPort, a.autoUpstreams, a.host
 	a.mu.Unlock()
 	if !due {
 		return
 	}
-	c, err := containerhost.Find(ctx, port, containerhost.Candidates(ctx))
+	var c containerhost.Candidate
+	var err error
+	if port != "" {
+		c, err = containerhost.Find(ctx, port, containerhost.Candidates(ctx))
+	} else {
+		c, err = containerhost.FindPort(ctx, upstreams, containerhost.Candidates(ctx))
+	}
 	if err != nil || (current != nil && current.Host == c.Host) {
 		return
 	}
-	a.log.Info("Toxiproxy found, syncing", "host", c.Host, "via", c.Source)
+	a.log.Info("container host found, syncing", "host", c.Host, "via", c.Source)
 	a.Sync(ctx)
 }
 
@@ -465,7 +499,8 @@ type ToxiproxyView struct {
 	Status Status `json:"status"`
 	// Builtin: Entropy runs Toxiproxy itself, as the config names no toxiproxy.api.
 	Builtin bool `json:"builtin"`
-	// Auto: toxiproxy.api's host is auto. Detected is the host found then,
+	// Auto: the container host is detected, because toxiproxy.api's host is
+	// auto, or (built-in) an upstream's is. Detected is the host found then,
 	// nil while none answers.
 	Auto     bool                     `json:"auto"`
 	Detected *containerhost.Candidate `json:"detected,omitempty"`
@@ -516,7 +551,8 @@ func (a *App) View(ctx context.Context) (View, error) {
 	cmdHealth := maps.Clone(a.cmdHealth)
 	running := maps.Clone(a.running)
 	tpStatus := a.tpStatus
-	tpView := ToxiproxyView{API: a.tp.Base(), Status: tpStatus, Builtin: a.usingBuiltin, Auto: a.autoPort != "", Detected: a.host}
+	tpView := ToxiproxyView{API: a.tp.Base(), Status: tpStatus, Builtin: a.usingBuiltin,
+		Auto: a.autoPort != "" || len(a.autoUpstreams) > 0, Detected: a.host}
 	lastSync := a.lastSync
 	a.mu.RUnlock()
 

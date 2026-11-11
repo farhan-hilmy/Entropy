@@ -34,6 +34,35 @@ func TestFindPrefersEarlierCandidates(t *testing.T) {
 	}
 }
 
+func TestFindPortFindsWhereAPublishedPortAnswers(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0") // plays a container's published port
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, closedPort, _ := net.SplitHostPort(closed.Addr().String())
+	closed.Close()
+
+	// Any of the ports will do: one container may not be running.
+	got, err := FindPort(context.Background(), []string{closedPort, port}, []Candidate{
+		{Host: "127.0.0.2", Source: "nothing there"},
+		{Host: "127.0.0.1", Source: "VM"},
+	})
+	if err != nil || got.Source != "VM" {
+		t.Fatalf("FindPort = %+v, %v", got, err)
+	}
+
+	_, err = FindPort(context.Background(), []string{closedPort}, []Candidate{{Host: "127.0.0.1", Source: "localhost"}})
+	if err == nil || !strings.Contains(err.Error(), "nothing answered on port "+closedPort) {
+		t.Fatalf("expected an error naming the port, got %v", err)
+	}
+}
+
 func TestFindListsWhatItTried(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
