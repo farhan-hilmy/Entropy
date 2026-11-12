@@ -82,11 +82,16 @@ func (a *App) runHealthCommand(ctx context.Context, s store.Service) (Status, er
 	}
 	defer release()
 
+	healthyBefore := a.dependenciesHealthy(s.Uses)
 	res := command.Run(ctx, cmd.Run, cmd.Cwd, time.Duration(cmd.TimeoutSec)*time.Second, CommandEnv(s.Name, s.BaseURL))
 	st := healthStatus(cmd, res)
+	// Only a run made while everything the service uses was up says how long
+	// the request normally takes: with a dependency down or faulted, the
+	// service may wait for its own timeouts (and a command can still exit 0).
+	typical := healthyBefore && a.dependenciesHealthy(s.Uses)
 	a.mu.Lock()
 	a.cmdHealth[s.Name] = st
-	if res.Err == nil && !res.TimedOut {
+	if res.Err == nil && !res.TimedOut && typical {
 		if a.healthTook == nil {
 			a.healthTook = map[string]time.Duration{}
 		}
@@ -94,6 +99,20 @@ func (a *App) runHealthCommand(ctx context.Context, s store.Service) (Status, er
 	}
 	a.mu.Unlock()
 	return st, nil
+}
+
+// dependenciesHealthy says whether every dependency in uses was Reachable at
+// its last check and has no fault on it.
+func (a *App) dependenciesHealthy(uses []string) bool {
+	active := a.faults.Active()
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, d := range uses {
+		if _, faulted := active[d]; faulted || a.deps[d].State != Reachable {
+			return false
+		}
+	}
+	return true
 }
 
 func healthStatus(cmd store.Command, res command.Result) Status {
