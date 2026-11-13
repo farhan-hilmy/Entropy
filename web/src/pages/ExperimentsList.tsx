@@ -70,7 +70,7 @@ export function ExperimentsList({ env }: { env: Environment }) {
                   <div className="name">{x.name}</div>
                   {x.definition.description && <div className="muted small">{x.definition.description}</div>}
                   {x.missing && <div className="muted small">Removed from the config file</div>}
-                  {!x.missing && <TimingNotes timing={x.timing} />}
+                  {!x.missing && <TimingNotes name={x.name} timing={x.timing} onFixed={load} />}
                 </td>
                 <td className="small">{breaks(x.definition)}</td>
                 <td>v{x.version}</td>
@@ -107,10 +107,44 @@ export function ExperimentsList({ env }: { env: Environment }) {
 }
 
 // TimingNotes says whether the experiment's requests fit its fault and recovery window.
-function TimingNotes({ timing }: { timing: Experiment['timing'] }) {
+// When the whole run may not fit in maxDurationSec, it offers to set the value that does.
+function TimingNotes({ name, timing, onFixed }: { name: string; timing: Experiment['timing']; onFixed: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const need = timing.minMaxDurationSec
+
+  async function setCap() {
+    if (!need) return
+    setBusy(true)
+    setError(null)
+    try {
+      const snap = await api.config()
+      await api.editConfig(snap.hash, { experimentCap: { name, maxDurationSec: need } })
+      onFixed()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <>
-      {timing.warnings.map((w) => <div key={w} className="timing-warning small">⚠ {w}</div>)}
+      {timing.warnings.map((w) => (
+        <div key={w} className="timing-warning small">
+          ⚠ {w}
+          {need && w.includes('maxDurationSec') && (
+            <>
+              {' '}
+              <button className="link" onClick={setCap} disabled={busy}
+                title="Changes only the maxDurationSec line of this experiment in the config file, then syncs">
+                {busy ? 'Saving…' : `Set maxDurationSec to ${need}`}
+              </button>
+            </>
+          )}
+        </div>
+      ))}
+      {error && <div className="error-text small">{error}</div>}
       {timing.note && <div className="muted small">{timing.note}</div>}
       {timing.measured === 'full' && timing.warnings.length === 0 && (
         <div className="muted small">✓ Its requests fit, by the times measured in past runs.</div>

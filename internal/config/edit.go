@@ -104,6 +104,13 @@ type ExperimentText struct {
 	YAML string `json:"yaml"`
 }
 
+// ExperimentCap sets one experiment's maxDurationSec, e.g. to the value the
+// timing check suggests; only that line of the file changes.
+type ExperimentCap struct {
+	Name           string `json:"name"`
+	MaxDurationSec int    `json:"maxDurationSec"`
+}
+
 // Named picks one part of the config by name.
 type Named struct {
 	Name string `json:"name"`
@@ -122,6 +129,7 @@ type Edit struct {
 	AddService       *NewService        `json:"addService,omitempty"`
 	Experiment       *ExperimentText    `json:"experiment,omitempty"`
 	RemoveExperiment *Named             `json:"removeExperiment,omitempty"`
+	ExperimentCap    *ExperimentCap     `json:"experimentCap,omitempty"`
 }
 
 // Apply writes e to the config file at path, provided its content still
@@ -169,17 +177,30 @@ func Apply(path, hash string, e Edit) (string, error) {
 func (e Edit) apply(cfg *Config, doc *yaml.Node, ed *editor) error {
 	set := 0
 	for _, part := range []bool{e.Environment != nil, e.Dependency != nil, e.Service != nil, e.AddDependency != nil, e.AddService != nil,
-		e.Experiment != nil, e.RemoveExperiment != nil} {
+		e.Experiment != nil, e.RemoveExperiment != nil, e.ExperimentCap != nil} {
 		if part {
 			set++
 		}
 	}
 	if set != 1 {
-		return errors.New("an edit sets exactly one of environment, dependency, service, addDependency, addService, experiment or removeExperiment")
+		return errors.New("an edit sets exactly one of environment, dependency, service, addDependency, addService, experiment removeExperiment or experimentCap")
 	}
 	switch {
 	case e.Experiment != nil:
 		return setExperiment(cfg, doc, ed, *e.Experiment)
+
+	case e.ExperimentCap != nil:
+		f := e.ExperimentCap
+		if f.MaxDurationSec <= 0 {
+			return &InvalidError{fmt.Errorf("maxDurationSec must be more than 0, got %d", f.MaxDurationSec)}
+		}
+		m, err := item(doc, "experiments", "experiment", f.Name)
+		if err != nil {
+			return err
+		}
+		i := slices.IndexFunc(cfg.Experiments, func(x Experiment) bool { return x.Name == f.Name })
+		cfg.Experiments[i].MaxDurationSec = f.MaxDurationSec
+		return ed.set(m, "maxDurationSec", strconv.Itoa(f.MaxDurationSec))
 
 	case e.RemoveExperiment != nil:
 		name := e.RemoveExperiment.Name

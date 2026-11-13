@@ -170,7 +170,8 @@ export interface Experiment {
   running: boolean
   // Whether its requests fit, from measured durations: full (all measured, "during"
   // ones under the fault), partial (some only outside a fault: lower bounds), none.
-  timing: { measured: 'full' | 'partial' | 'none'; warnings: string[]; note?: string }
+  // minMaxDurationSec: set when the whole run may not fit in maxDurationSec; the smallest value that does.
+  timing: { measured: 'full' | 'partial' | 'none'; warnings: string[]; note?: string; minMaxDurationSec?: number }
 }
 
 export interface Environment {
@@ -245,6 +246,8 @@ export type ConfigEdit =
   // One whole experiment as YAML; name is the one it replaces, '' adds it.
   | { experiment: { name: string; yaml: string } }
   | { removeExperiment: { name: string } }
+  // Sets just that experiment's maxDurationSec line.
+  | { experimentCap: { name: string; maxDurationSec: number } }
 
 // One experiment as written in the config file (comments included), for the editor.
 export interface ExperimentSource {

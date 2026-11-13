@@ -460,8 +460,14 @@ itself, and a run longer than `maxDurationSec`. Whether requests fit uses
 their typical (median) time. The run's total against `maxDurationSec` (the
 preflight's route checks, the baseline, the faults and the recovery window)
 uses the slowest time measured instead, since being aborted wastes a whole
-run, and it says how many measurements that comes from. How sure the check
-is depends on what it has measured:
+run, and it says how many measurements that comes from. That warning has a
+**Set maxDurationSec to N** button on the Experiments page: it writes the
+smallest value that fits into that experiment's `maxDurationSec` line (only
+that line changes, its comment stays) and syncs, so the warning goes away
+because the cap now fits. Round it up by hand if you want a margin. Health
+checks made while a dependency the service uses is down or faulted don't
+count as measurements, since the service may be waiting out its own
+timeouts. How sure the check is depends on what it has measured:
 
 | Measured | From | Means |
 |---|---|---|
@@ -578,7 +584,7 @@ web/                React + TypeScript + Vite UI
 | GET | `/api/environment` | Environment, dependencies, services and statuses |
 | POST | `/api/sync` | Re-read `entropy.yaml` (422 with errors if invalid) |
 | GET | `/api/config` | `entropy.yaml` as written (no defaults), plus a `hash` of its content |
-| PATCH | `/api/config` | Save one change and sync: `{hash, <part>}` with one of `environment`, `dependency`, `service`, `addDependency`, `addService`, `experiment` (`{name, yaml}`: replaces that experiment, or adds one when `name` is empty), `removeExperiment` (`{name}`). 409 if the file changed since `hash`, 422 if the result is invalid |
+| PATCH | `/api/config` | Save one change and sync: `{hash, <part>}` with one of `environment`, `dependency`, `service`, `addDependency`, `addService`, `experiment` (`{name, yaml}`: replaces that experiment, or adds one when `name` is empty), `removeExperiment` (`{name}`), `experimentCap` (`{name, maxDurationSec}`: sets only that line). 409 if the file changed since `hash`, 422 if the result is invalid |
 | GET | `/api/experiments/{name}/source` | One experiment as written in `entropy.yaml`, comments included, plus the file's `hash`, for the editor |
 | POST | `/api/dependencies/{name}/fault` | Apply a fault: `{type, durationSec, …options}` (see step 5: `latencyMs`, `jitterMs`, `timeoutMs`, `downSec`, `upSec`). 409 if it already has one, 422 if invalid |
 | DELETE | `/api/dependencies/{name}/fault` | Stop the dependency's fault now |

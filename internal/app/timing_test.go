@@ -110,6 +110,10 @@ func TestTimingAfterRecoveryAndTotal(t *testing.T) {
 		}
 	}
 
+	e.MaxDurationSec = 168 // the suggested value: enough
+	if timing := assessTiming(e, s, oauthHealth, oauthUses); timing.MinMaxDurationSec != 0 {
+		t.Errorf("with maxDurationSec 168: MinMaxDurationSec = %d, want 0", timing.MinMaxDurationSec)
+	}
 	e.MaxDurationSec = 170 // enough even on the slowest day measured
 	for _, w := range assessTiming(e, s, oauthHealth, oauthUses).Warnings {
 		if strings.Contains(w, "maxDurationSec") {

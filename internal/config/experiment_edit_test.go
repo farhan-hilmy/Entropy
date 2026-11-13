@@ -188,3 +188,29 @@ func TestRenameExperiment(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestExperimentCapChangesOnlyThatLine(t *testing.T) {
+	content := strings.Replace(experimentFixture, "    description: Redis down for 30 s.\n",
+		"    description: Redis down for 30 s.\n    maxDurationSec: 160   # safety cap\n", 1)
+	path, snap := snapshot(t, content)
+	if _, err := Apply(path, snap.Hash, Edit{ExperimentCap: &ExperimentCap{Name: "redis-outage", MaxDurationSec: 163}}); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(content, "maxDurationSec: 160   # safety cap", "maxDurationSec: 163   # safety cap", 1)
+	if got := fileContent(t, path); got != want {
+		t.Errorf("got\n%s\nwant\n%s", got, want)
+	}
+
+	// Not in the file yet (the default applies): the line is added.
+	path, snap = snapshot(t, experimentFixture)
+	if _, err := Apply(path, snap.Hash, Edit{ExperimentCap: &ExperimentCap{Name: "mongo-latency", MaxDurationSec: 200}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Experiments[1].MaxDurationSec; got != 200 {
+		t.Errorf("mongo-latency maxDurationSec = %d, want 200", got)
+	}
+}

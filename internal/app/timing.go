@@ -31,6 +31,9 @@ type Timing struct {
 	Measured string   `json:"measured"` // full | partial | none
 	Warnings []string `json:"warnings"`
 	Note     string   `json:"note,omitempty"`
+	// MinMaxDurationSec is set when the whole run may not fit in
+	// maxDurationSec: the smallest value that fits, offered as a one-click fix.
+	MinMaxDurationSec int `json:"minMaxDurationSec,omitempty"`
 }
 
 // samples are measured durations of one request, under a fault or not.
@@ -228,8 +231,9 @@ func assessTiming(e config.Experiment, s map[string]samples, health map[string]s
 		}
 	}
 
-	if w := totalWarning(e, s, uses); w != "" {
+	if w, need := totalWarning(e, s, uses); w != "" {
 		t.Warnings = append(t.Warnings, w)
+		t.MinMaxDurationSec = need
 	}
 
 	switch {
@@ -247,7 +251,7 @@ func assessTiming(e config.Experiment, s map[string]samples, health map[string]s
 // typical ones, and no made-up margin; it says how many measurements they
 // come from. Without measured preflight or baseline requests it says nothing:
 // config validation already rejects faults + window alone being too long.
-func totalWarning(e config.Experiment, s map[string]samples, uses map[string][]string) string {
+func totalWarning(e config.Experiment, s map[string]samples, uses map[string][]string) (warning string, need int) {
 	fewest := 0 // the fewest measurements behind any of the estimates
 	slowest := func(key string) (time.Duration, bool) {
 		ds := s[key].normal // preflight and baseline run without a fault
@@ -285,14 +289,16 @@ func totalWarning(e config.Experiment, s map[string]samples, uses map[string][]s
 		}
 	}
 	if preflight+baseline == 0 {
-		return ""
+		return "", 0
 	}
 	total := preflight + baseline + time.Duration(e.FaultsEndSec()+e.RecoveryWindowSec)*time.Second
 	if total < time.Duration(e.MaxDurationSec)*time.Second {
-		return ""
+		return "", 0
 	}
+	// The smallest whole number of seconds the total stays under.
+	need = int(math.Floor(total.Seconds())) + 1
 	return fmt.Sprintf("with the slowest times measured (each from at least %d measurement(s)), the preflight (~%s), baseline (~%s), faults (%d s) and recovery window (%d s) take ~%s, more than maxDurationSec %d, so the run could be aborted. Make maxDurationSec at least %d.",
-		fewest, roundSec(preflight), roundSec(baseline), e.FaultsEndSec(), e.RecoveryWindowSec, roundSec(total), e.MaxDurationSec, int(math.Ceil(total.Seconds())))
+		fewest, roundSec(preflight), roundSec(baseline), e.FaultsEndSec(), e.RecoveryWindowSec, roundSec(total), e.MaxDurationSec, need), need
 }
 
 // routePairs is the experiment's trigger services that the preflight
