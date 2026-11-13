@@ -28,3 +28,9 @@ func (a *App) EditConfig(ctx context.Context, hash string, e config.Edit) (EditR
 	a.log.Info("config edited from the UI", "config", a.configPath)
 	return EditResult{Hash: newHash, Sync: a.Sync(ctx)}, nil
 }
+
+// ExperimentSource returns one experiment as it's written in the config file,
+// comments included, for the experiment editor.
+func (a *App) ExperimentSource(name string) (config.ExperimentSource, error) {
+	return config.ReadExperiment(a.configPath, name)
+}

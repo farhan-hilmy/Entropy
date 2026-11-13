@@ -242,6 +242,15 @@ export type ConfigEdit =
   | { service: ServiceFields }
   | { addDependency: NewDependency }
   | { addService: NewService }
+  // One whole experiment as YAML; name is the one it replaces, '' adds it.
+  | { experiment: { name: string; yaml: string } }
+  | { removeExperiment: { name: string } }
+
+// One experiment as written in the config file (comments included), for the editor.
+export interface ExperimentSource {
+  hash: string
+  yaml: string
+}
 
 export interface EditResult {
   hash: string
@@ -315,6 +324,13 @@ export const api = {
   async experiments(): Promise<Experiment[]> {
     const res = await fetch('/api/experiments')
     if (!res.ok) throw await errorFrom(res)
+    return res.json()
+  },
+
+  // 404 if the config file has no experiment of that name.
+  async experimentSource(name: string): Promise<ExperimentSource> {
+    const res = await fetch(`/api/experiments/${encodeURIComponent(name)}/source`)
+    if (!res.ok) throw Object.assign(await errorFrom(res), { status: res.status })
     return res.json()
   },
 

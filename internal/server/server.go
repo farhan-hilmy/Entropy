@@ -123,6 +123,17 @@ func New(a *app.App, ui fs.FS) http.Handler {
 	})
 
 	// Starts a run in the background; answers with it at once (409 if one is running).
+	// One experiment as written in the config file, for the editor; save it
+	// back with PATCH /api/config {hash, experiment: {name, yaml}}.
+	mux.HandleFunc("GET /api/experiments/{name}/source", func(w http.ResponseWriter, r *http.Request) {
+		src, err := a.ExperimentSource(r.PathValue("name"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, src)
+	})
+
 	mux.HandleFunc("POST /api/experiments/{name}/run", func(w http.ResponseWriter, r *http.Request) {
 		run, err := a.StartRun(r.Context(), r.PathValue("name"))
 		if err != nil {
@@ -233,7 +244,7 @@ func writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, app.ErrAlreadyRunning), errors.Is(err, config.ErrConflict), errors.Is(err, faults.ErrBusy),
 		errors.Is(err, app.ErrVerifying), errors.Is(err, app.ErrFaultActive), errors.Is(err, app.ErrRunActive), errors.Is(err, app.ErrNotFinished):
 		status = http.StatusConflict
-	case errors.As(err, &invalid), errors.Is(err, faults.ErrInvalid), errors.Is(err, app.ErrNoTrigger):
+	case errors.As(err, &invalid), errors.Is(err, config.ErrUnsafe), errors.Is(err, faults.ErrInvalid), errors.Is(err, app.ErrNoTrigger):
 		status = http.StatusUnprocessableEntity
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})

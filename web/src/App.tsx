@@ -7,6 +7,7 @@ import { DependencyDetail } from './pages/DependencyDetail'
 import { ServicesList } from './pages/ServicesList'
 import { ServiceDetail } from './pages/ServiceDetail'
 import { ExperimentsList } from './pages/ExperimentsList'
+import { ExperimentEditor } from './pages/ExperimentEditor'
 import { RunView } from './pages/RunView'
 import { RunsList } from './pages/RunsList'
 import { Dot } from './ui'
@@ -58,6 +59,13 @@ export default function App() {
       page = <ServiceDetail env={env} name={decodeURIComponent(route[1])} onChanged={refresh} />
     } else if (route[0] === 'services') {
       page = <ServicesList env={env} onChanged={refresh} />
+    } else if (route[0] === 'experiments' && route[1] === 'new') {
+      page = <ExperimentEditor env={env} onChanged={refresh} />
+    } else if (route[0] === 'experiments' && route[1] && route[2] === 'edit') {
+      // #/experiments/<name>/edit, or …/edit/<run id> to start from how that run ran it
+      const name = decodeURIComponent(route[1])
+      const fromRun = route[3] ? decodeURIComponent(route[3]) : undefined
+      page = <ExperimentEditor key={`${name}/${fromRun ?? ''}`} env={env} name={name} fromRun={fromRun} onChanged={refresh} />
     } else if (route[0] === 'experiments') {
       page = <ExperimentsList env={env} />
     } else if (route[0] === 'runs' && route[1]) {

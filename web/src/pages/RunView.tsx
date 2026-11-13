@@ -107,6 +107,10 @@ export function RunView({ id, onChanged }: { id: string; onChanged: () => void }
                 Run current (v{current.version})
               </button>
             )}
+            <button className="btn" onClick={() => navigate(`/experiments/${encodeURIComponent(run.experiment)}/edit/${encodeURIComponent(run.id)}`)}
+              title="Open this run's experiment in the editor; saving replaces the one in the config file, then runs it">
+              Edit and rerun
+            </button>
             <button className="btn" onClick={copyYaml} title="This run's experiment as YAML, to paste under experiments: in entropy.yaml">
               {copied ? 'Copied ✓' : 'Copy as YAML'}
             </button>

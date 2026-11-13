@@ -29,7 +29,8 @@ import (
 var (
 	ErrConflict = errors.New("the config file changed since it was read; reload it and try again")
 	ErrNotFound = errors.New("not found")
-	errUnsafe   = errors.New("this part of the config file can't be edited safely from the UI; edit the file instead")
+	// ErrUnsafe: the edit would touch more than intended (unusual layout).
+	ErrUnsafe   = errors.New("this part of the config file can't be edited safely from the UI; edit the file instead")
 )
 
 // InvalidError means the file, or the file after the edit, is not a valid config.
@@ -95,16 +96,32 @@ type NewService struct {
 	Uses        []string `json:"uses"`
 }
 
+// ExperimentText is one experiment as YAML, as the experiment editor shows
+// it: a mapping (name, faults, triggers, …), comments included. Experiments
+// only name commands from the file, so editing them can't add code to run.
+type ExperimentText struct {
+	Name string `json:"name"` // the experiment it replaces; "" adds a new one
+	YAML string `json:"yaml"`
+}
+
+// Named picks one part of the config by name.
+type Named struct {
+	Name string `json:"name"`
+}
+
 // Edit changes one part of the config: set exactly one of its fields.
 // Environment, Dependency and Service replace the editable fields of an
 // existing part; AddDependency and AddService append a new one. Empty
 // optional fields are left out of the file, so their defaults apply.
+// Experiment replaces or adds a whole experiment; RemoveExperiment deletes one.
 type Edit struct {
-	Environment   *EnvironmentFields `json:"environment,omitempty"`
-	Dependency    *DependencyFields  `json:"dependency,omitempty"`
-	Service       *ServiceFields     `json:"service,omitempty"`
-	AddDependency *NewDependency     `json:"addDependency,omitempty"`
-	AddService    *NewService        `json:"addService,omitempty"`
+	Environment      *EnvironmentFields `json:"environment,omitempty"`
+	Dependency       *DependencyFields  `json:"dependency,omitempty"`
+	Service          *ServiceFields     `json:"service,omitempty"`
+	AddDependency    *NewDependency     `json:"addDependency,omitempty"`
+	AddService       *NewService        `json:"addService,omitempty"`
+	Experiment       *ExperimentText    `json:"experiment,omitempty"`
+	RemoveExperiment *Named             `json:"removeExperiment,omitempty"`
 }
 
 // Apply writes e to the config file at path, provided its content still
@@ -127,7 +144,7 @@ func Apply(path, hash string, e Edit) (string, error) {
 		return "", &InvalidError{err}
 	}
 	if root.Kind != yaml.DocumentNode || len(root.Content) != 1 || root.Content[0].Kind != yaml.MappingNode {
-		return "", errUnsafe
+		return "", ErrUnsafe
 	}
 	ed := newEditor(data)
 	if err := e.apply(want, root.Content[0], ed); err != nil {
@@ -140,7 +157,7 @@ func Apply(path, hash string, e Edit) (string, error) {
 	}
 	// The safety net: the edited text must mean exactly the intended config.
 	if got, err := decode(out, path); err != nil || !reflect.DeepEqual(got, want) {
-		return "", errUnsafe
+		return "", ErrUnsafe
 	}
 	if err := writeFile(path, out); err != nil {
 		return "", err
@@ -151,15 +168,35 @@ func Apply(path, hash string, e Edit) (string, error) {
 // apply sets the fields both on cfg, the expected result, and in the file's text.
 func (e Edit) apply(cfg *Config, doc *yaml.Node, ed *editor) error {
 	set := 0
-	for _, part := range []bool{e.Environment != nil, e.Dependency != nil, e.Service != nil, e.AddDependency != nil, e.AddService != nil} {
+	for _, part := range []bool{e.Environment != nil, e.Dependency != nil, e.Service != nil, e.AddDependency != nil, e.AddService != nil,
+		e.Experiment != nil, e.RemoveExperiment != nil} {
 		if part {
 			set++
 		}
 	}
 	if set != 1 {
-		return errors.New("an edit sets exactly one of environment, dependency, service, addDependency or addService")
+		return errors.New("an edit sets exactly one of environment, dependency, service, addDependency, addService, experiment or removeExperiment")
 	}
 	switch {
+	case e.Experiment != nil:
+		return setExperiment(cfg, doc, ed, *e.Experiment)
+
+	case e.RemoveExperiment != nil:
+		name := e.RemoveExperiment.Name
+		m, err := item(doc, "experiments", "experiment", name)
+		if err != nil {
+			return err
+		}
+		if _, err := ed.dashColumn(m); err != nil {
+			return err
+		}
+		cfg.Experiments = slices.DeleteFunc(cfg.Experiments, func(x Experiment) bool { return x.Name == name })
+		if len(cfg.Experiments) == 0 {
+			cfg.Experiments = nil // as "experiments:" with nothing under it decodes
+		}
+		ed.replace(m.Line, lastLine(m))
+		return nil
+
 	case e.AddDependency != nil:
 		f := e.AddDependency
 		cfg.Dependencies = append(cfg.Dependencies, Dependency{Name: f.Name, Kind: f.Kind, Address: f.Address, Upstream: f.Upstream, Listen: f.Listen})
@@ -359,7 +396,7 @@ func (ed *editor) setIn(doc *yaml.Node, section, key, text string) error {
 		ed.replace(k.Line, k.Line, indent+section+":", indent+"  "+key+": "+text)
 		return nil
 	}
-	return errUnsafe
+	return ErrUnsafe
 }
 
 type field struct{ key, text string } // text "" leaves the key out
@@ -389,6 +426,13 @@ func (ed *editor) appendItem(doc *yaml.Node, section string, fields []field) err
 		return lines
 	}
 
+	return ed.appendLines(doc, section, item)
+}
+
+// appendLines adds an entry to the end of the doc's list section; render
+// gives its lines with the dash at column dash and keys at column keys,
+// matching the entries already there.
+func (ed *editor) appendLines(doc *yaml.Node, section string, render func(dash, keys int) []string) error {
 	k, seq := lookup(doc, section)
 	switch {
 	case seq == nil:
@@ -396,20 +440,20 @@ func (ed *editor) appendItem(doc *yaml.Node, section string, fields []field) err
 		if ed.lines[last-1] == "" { // the file ends with a line break
 			last--
 		}
-		ed.replace(last+1, last, append([]string{"", section + ":"}, item(2, 4)...)...)
+		ed.replace(last+1, last, append([]string{"", section + ":"}, render(2, 4)...)...)
 	case seq.Kind == yaml.SequenceNode && seq.Style&yaml.FlowStyle == 0 && len(seq.Content) > 0:
 		first := seq.Content[0]
-		if first.Kind != yaml.MappingNode {
-			return errUnsafe
+		if first.Kind != yaml.MappingNode || first.Column <= seq.Column {
+			return ErrUnsafe
 		}
-		ed.replace(lastLine(seq)+1, lastLine(seq), item(seq.Column-1, first.Column-1)...)
+		ed.replace(lastLine(seq)+1, lastLine(seq), render(seq.Column-1, first.Column-1)...)
 	case seq.Line == k.Line && (seq.Tag == "!!null" || seq.Kind == yaml.SequenceNode && len(seq.Content) == 0):
 		// "section:" or "section: []" on one line.
 		indent := strings.Repeat(" ", k.Column-1)
-		lines := item(k.Column-1+2, k.Column-1+4)
+		lines := render(k.Column-1+2, k.Column-1+4)
 		ed.replace(k.Line, k.Line, append([]string{indent + section + ":"}, lines...)...)
 	default:
-		return errUnsafe
+		return ErrUnsafe
 	}
 	return nil
 }
@@ -420,7 +464,7 @@ func (ed *editor) set(m *yaml.Node, key, text string) error {
 		return fmt.Errorf("%s can't contain a line break", key)
 	}
 	if m.Style&yaml.FlowStyle != 0 || len(m.Content) == 0 {
-		return errUnsafe
+		return ErrUnsafe
 	}
 	indent := strings.Repeat(" ", m.Content[0].Column-1)
 	k, v := lookup(m, key)

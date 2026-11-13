@@ -39,10 +39,11 @@ export function ExperimentsList({ env }: { env: Environment }) {
         <div>
           <h1>Experiments</h1>
           <p className="muted small">
-            Defined under <code>experiments:</code> in <code>{env.configPath}</code>. Edit the file, then press Sync on the
-            Environment page; each change makes a new version.
+            Defined under <code>experiments:</code> in <code>{env.configPath}</code>. Edit them here, or in the file and then
+            press Sync on the Environment page; each change makes a new version.
           </p>
         </div>
+        <button className="btn primary" onClick={() => navigate('/experiments/new')}>New experiment</button>
       </div>
       {error && <div className="banner error"><pre>{error}</pre></div>}
       {env.activeRun && (
@@ -52,7 +53,10 @@ export function ExperimentsList({ env }: { env: Environment }) {
       )}
       {experiments === null ? <p className="muted">Loading…</p> : experiments.length === 0 ? (
         <section className="panel">
-          <p>No experiments yet. Add one under <code>experiments:</code> in the config file; <code>entropy.example.yaml</code> has a sample.</p>
+          <p>
+            No experiments yet. <a onClick={() => navigate('/experiments/new')}>Create one</a>, or add it under{' '}
+            <code>experiments:</code> in the config file; <code>entropy.example.yaml</code> has a sample.
+          </p>
         </section>
       ) : (
         <table>
@@ -83,9 +87,14 @@ export function ExperimentsList({ env }: { env: Environment }) {
                     : <span className="muted small">—</span>}
                 </td>
                 <td>
-                  <button className="btn primary" onClick={() => start(x.name)} disabled={x.missing || !!env.activeRun || starting !== ''}>
-                    {starting === x.name ? 'Starting…' : 'Run'}
-                  </button>
+                  <div className="edit-actions">
+                    <button className="btn" onClick={() => navigate(`/experiments/${encodeURIComponent(x.name)}/edit`)} disabled={x.missing}>
+                      Edit
+                    </button>
+                    <button className="btn primary" onClick={() => start(x.name)} disabled={x.missing || !!env.activeRun || starting !== ''}>
+                      {starting === x.name ? 'Starting…' : 'Run'}
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}

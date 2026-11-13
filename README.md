@@ -15,11 +15,11 @@ Toxiproxy runs inside Entropy, so `entropy up` is all you start. You can
 also point Entropy at a Toxiproxy you run yourself, e.g. in a container
 ([Use your own Toxiproxy](#use-your-own-toxiproxy)).
 
-> **Current status:** environment setup, faults, experiments, runs and the
-> built-in Toxiproxy (MVP build steps 1, 2, 4, 5 and 7). You can register dependencies and services, see
+> **Current status:** the MVP is complete (build steps 1 to 7): environment
+> setup, faults, experiments with an editor, runs with history and rerun, and
+> the built-in Toxiproxy. You can register dependencies and services, see
 > live statuses, apply a timed fault, verify a service goes through the proxy,
-> and run experiments from `entropy.yaml` that end with a verdict. The
-> experiment editor in the UI is not built yet: you write experiments in the file.
+> and write, run and rerun experiments that end with a verdict.
 
 ---
 
@@ -380,10 +380,20 @@ tell services apart.
 ## 6. Run an experiment
 
 An experiment breaks dependencies on purpose, sends requests to a service
-before, during and after, and checks how it behaved. You write experiments
+before, during and after, and checks how it behaved. Experiments live
 under `experiments:` in `entropy.yaml` (`entropy.example.yaml` has a full
-sample with comments), press **Sync**, then press **Run** on the
-**Experiments** page.
+sample with comments). Write them there and press **Sync**, or in the UI:
+on the **Experiments** page, **New experiment** opens the editor with a
+working start built from your dependencies and service commands, and
+**Edit** opens one experiment as YAML. The editor lists the names you can
+use (dependencies, `service/command`s, fault types, phases, assertions).
+**Save** checks the whole config and syncs; an invalid experiment is not
+saved and the error says why. Only that experiment's lines in the file
+change, so your comments elsewhere stay as they are, and comments you write
+inside it are kept too. **Save and run** starts it right away; **Remove**
+deletes it from the file (its runs stay in **Runs**). Renaming an experiment
+makes it a new one: past runs stay under the old name. Then press **Run** on
+the **Experiments** page.
 
 ```yaml
 experiments:
@@ -479,6 +489,9 @@ On a finished run's report:
   the new run's timeline says what moved, and links back to the original.
 - **Run current (vN)** appears when the experiment has changed since, and
   runs what's in the file now.
+- **Edit and rerun** opens the experiment in the editor as this run ran it.
+  Change what you need; **Save and rerun** saves it to `entropy.yaml` as a
+  new version (adding it back if it was removed) and runs it.
 - **Copy as YAML** copies the run's experiment, ready to paste under
   `experiments:`, e.g. to bring back an older version and adjust it.
 
@@ -565,7 +578,8 @@ web/                React + TypeScript + Vite UI
 | GET | `/api/environment` | Environment, dependencies, services and statuses |
 | POST | `/api/sync` | Re-read `entropy.yaml` (422 with errors if invalid) |
 | GET | `/api/config` | `entropy.yaml` as written (no defaults), plus a `hash` of its content |
-| PATCH | `/api/config` | Save one change and sync: `{hash, <part>}` with one of `environment`, `dependency`, `service`, `addDependency`, `addService`. 409 if the file changed since `hash`, 422 if the result is invalid |
+| PATCH | `/api/config` | Save one change and sync: `{hash, <part>}` with one of `environment`, `dependency`, `service`, `addDependency`, `addService`, `experiment` (`{name, yaml}`: replaces that experiment, or adds one when `name` is empty), `removeExperiment` (`{name}`). 409 if the file changed since `hash`, 422 if the result is invalid |
+| GET | `/api/experiments/{name}/source` | One experiment as written in `entropy.yaml`, comments included, plus the file's `hash`, for the editor |
 | POST | `/api/dependencies/{name}/fault` | Apply a fault: `{type, durationSec, …options}` (see step 5: `latencyMs`, `jitterMs`, `timeoutMs`, `downSec`, `upSec`). 409 if it already has one, 422 if invalid |
 | DELETE | `/api/dependencies/{name}/fault` | Stop the dependency's fault now |
 | POST | `/api/dependencies/{name}/verify` | Check that a service goes through the proxy: `{service, command}` (empty command = its health check). 409 during a fault, 422 if there's no request to run |
