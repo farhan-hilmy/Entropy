@@ -19,6 +19,7 @@ import (
 	"entropy/internal/app"
 	"entropy/internal/command"
 	"entropy/internal/config"
+	"entropy/internal/localguard"
 	"entropy/internal/server"
 	"entropy/internal/toxiproxy"
 	"entropy/internal/store"
@@ -164,7 +165,7 @@ func up(args []string) error {
 
 	go a.Run(ctx)
 
-	srv := &http.Server{Handler: server.New(a, web.Dist())}
+	srv := &http.Server{Handler: localguard.Wrap(server.New(a, web.Dist()), ln.Addr().String())}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

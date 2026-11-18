@@ -532,6 +532,8 @@ Toxiproxy answers.
 | Run: *inconclusive: … doesn't seem to reach redis through the proxy* | Preflight verified the route with one of the experiment's commands, or the health check. Point the service at the proxy, or make sure that request uses the dependency. |
 | Run: *inconclusive: the steady state didn't hold before any fault* | A `baseline` assertion failed: the service wasn't healthy to begin with. Its report shows what it got. |
 | Run: *another experiment is running* | One runs at a time. Wait, or open it from the banner on Experiments and press **Stop run**. |
+| API answers 403: *refused a request addressed to "…"* | Entropy only answers requests addressed to `localhost` or `127.0.0.1` (or the exact `-addr` host), so a web page can't reach it through a DNS trick. Use one of those in the URL. |
+| API answers 403: *refused a change sent by a web page on another site* | Changes (POST, PATCH, DELETE) are refused when a browser sends them from another site, so a page you visit can't start a run or break a dependency. Entropy's UI, curl, scripts and agents are not affected. |
 
 ---
 
@@ -572,6 +574,7 @@ internal/toxiproxy/ minimal Toxiproxy API client, and the built-in Toxiproxy ser
 internal/containerhost/ find the container host for "auto" addresses and upstreams
 internal/faults/    apply faults through Toxiproxy, remove them when their time is up
 internal/checks/    protocol-level checks through the proxy
+internal/localguard/ keep web pages out of the local APIs (Host and cross-origin checks)
 internal/app/       sync, status monitor, faults, route checks, run engine, view for the UI
 internal/server/    JSON API + embedded UI
 web/                React + TypeScript + Vite UI

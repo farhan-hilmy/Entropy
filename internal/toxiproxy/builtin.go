@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"time"
 
+	"entropy/internal/localguard"
+
 	tpserver "github.com/Shopify/toxiproxy/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
@@ -33,7 +35,7 @@ func StartBuiltin() (*Builtin, error) {
 	srv := tpserver.NewServer(tpserver.NewMetricsContainer(prometheus.NewRegistry()), zerolog.Nop())
 	b := &Builtin{
 		srv:  srv,
-		http: &http.Server{Handler: srv.Routes(), ReadHeaderTimeout: 10 * time.Second},
+		http: &http.Server{Handler: localguard.Wrap(srv.Routes(), ln.Addr().String()), ReadHeaderTimeout: 10 * time.Second},
 		url:  "http://" + ln.Addr().String(),
 	}
 	go b.http.Serve(ln)
