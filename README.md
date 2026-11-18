@@ -19,7 +19,8 @@ also point Entropy at a Toxiproxy you run yourself, e.g. in a container
 > setup, faults, experiments with an editor, runs with history and rerun, and
 > the built-in Toxiproxy. You can register dependencies and services, see
 > live statuses, apply a timed fault, verify a service goes through the proxy,
-> and write, run and rerun experiments that end with a verdict.
+> and write, run and rerun experiments that end with a verdict. After the MVP:
+> AI agents can use Entropy through `entropy mcp` (section 8).
 
 ---
 
@@ -510,9 +511,46 @@ killing Entropy in the middle of a fault leaves nothing broken after the next
 start. If Toxiproxy isn't reachable at startup, Entropy does it as soon as
 Toxiproxy answers.
 
+## 8. Use Entropy from an AI agent (MCP)
+
+`entropy mcp` offers Entropy to agents such as Claude Code as MCP tools, so an
+agent can run an experiment, read why it failed, fix the service and run it
+again. It talks to the running `entropy up`, so start that first.
+
+Build Entropy, then add it to Claude Code (once, from any folder):
+
+```sh
+go build -o entropy.exe ./cmd/entropy
+claude mcp add entropy -- D:/path/to/entropy.exe mcp
+```
+
+Use `--scope project` to put it in the repo's `.mcp.json` for the whole team,
+and `-url http://127.0.0.1:7500` after `mcp` if Entropy runs on another port.
+Check it with `/mcp` in Claude Code.
+
+| Tool | What it does |
+|---|---|
+| `entropy_status` | dependencies (reachable? a fault on it?), services and their commands, any run in progress |
+| `list_experiments` | each experiment's faults, last verdict and timing warnings |
+| `get_experiment` | one experiment as YAML, as written in `entropy.yaml`, and its recent runs |
+| `list_runs`, `get_run` | verdicts, each assertion's outcome, the timeline |
+| `run_experiment` | runs it and waits for the verdict (`waitSec: 0` returns at once) |
+| `stop_run`, `stop_all_faults` | the safety exits |
+| `save_experiment` | the editor's safe save: only that experiment's lines change, an invalid one changes nothing |
+| `run_command` | runs a service's command once, without faults, e.g. to check a fix |
+
+- **Agents can't start a fault on their own:** every fault they cause is part of
+  a run, with a verdict and Entropy's limits (`maxDurationSec`, one run at a
+  time, faults always removed).
+- A run really breaks the dependency for every service using it. Claude Code
+  asks before each tool call unless you allow it; allowing the read tools and
+  the stop tools is safe.
+- Try: *"Run redis-outage-oauth with Entropy. If it fails, find out why in the
+  oauth code, fix it, and rerun until it passes."*
+
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Problem | Fix |
 |---|---|
@@ -532,6 +570,7 @@ Toxiproxy answers.
 | Run: *inconclusive: … doesn't seem to reach redis through the proxy* | Preflight verified the route with one of the experiment's commands, or the health check. Point the service at the proxy, or make sure that request uses the dependency. |
 | Run: *inconclusive: the steady state didn't hold before any fault* | A `baseline` assertion failed: the service wasn't healthy to begin with. Its report shows what it got. |
 | Run: *another experiment is running* | One runs at a time. Wait, or open it from the banner on Experiments and press **Stop run**. |
+| Agent: *Entropy isn't running at http://127.0.0.1:7400* | Start `entropy up` in the folder with `entropy.yaml`. If it runs on another port, add `-url` to the `claude mcp add` line. |
 | API answers 403: *refused a request addressed to "…"* | Entropy only answers requests addressed to `localhost` or `127.0.0.1` (or the exact `-addr` host), so a web page can't reach it through a DNS trick. Use one of those in the URL. |
 | API answers 403: *refused a change sent by a web page on another site* | Changes (POST, PATCH, DELETE) are refused when a browser sends them from another site, so a page you visit can't start a run or break a dependency. Entropy's UI, curl, scripts and agents are not affected. |
 
@@ -566,7 +605,7 @@ MSYS_NO_PATHCONV=1 podman run --rm -v "$(pwd -W):/src:ro" -w /src \
 ### Code layout
 
 ```
-cmd/entropy/        CLI: up, validate, run
+cmd/entropy/        CLI: up, validate, run, mcp
 internal/config/    load and validate entropy.yaml; edit it in place for the UI
 internal/command/   run a command line with a timeout, kill its process tree
 internal/store/     SQLite: environment, dependencies, services, experiment versions, runs; sync reconcile
@@ -575,6 +614,7 @@ internal/containerhost/ find the container host for "auto" addresses and upstrea
 internal/faults/    apply faults through Toxiproxy, remove them when their time is up
 internal/checks/    protocol-level checks through the proxy
 internal/localguard/ keep web pages out of the local APIs (Host and cross-origin checks)
+internal/mcpserver/ entropy mcp: MCP tools for agents, calling the REST API
 internal/app/       sync, status monitor, faults, route checks, run engine, view for the UI
 internal/server/    JSON API + embedded UI
 web/                React + TypeScript + Vite UI

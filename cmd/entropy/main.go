@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -20,16 +21,22 @@ import (
 	"entropy/internal/command"
 	"entropy/internal/config"
 	"entropy/internal/localguard"
+	"entropy/internal/mcpserver"
 	"entropy/internal/server"
 	"entropy/internal/toxiproxy"
 	"entropy/internal/store"
 	"entropy/web"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const usage = `Usage:
   entropy up        [-config entropy.yaml] [-addr 127.0.0.1:7400] [-db .entropy/entropy.db]
   entropy validate  [-config entropy.yaml]
   entropy run       [-config entropy.yaml] <service>/<command>
+  entropy mcp       [-url http://127.0.0.1:7400]
+                    MCP server for AI agents, over stdio; needs a running entropy up.
+                    Claude Code: claude mcp add entropy -- entropy mcp
 `
 
 func main() {
@@ -45,6 +52,8 @@ func main() {
 		err = validate(os.Args[2:])
 	case "run":
 		err = runCommand(os.Args[2:])
+	case "mcp":
+		err = serveMCP(os.Args[2:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -103,6 +112,31 @@ func runCommand(args []string) error {
 		}
 	}
 	return fmt.Errorf("no command %s/%s in %s", service, name, *configPath)
+}
+
+// serveMCP serves Entropy's MCP tools over stdin and stdout, for an agent
+// that starts it (e.g. Claude Code). Each tool calls the Entropy at -url, so
+// stdout carries only the protocol; logs go to stderr.
+func serveMCP(args []string) error {
+	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
+	url := fs.String("url", "http://127.0.0.1:7400", "the running Entropy (entropy up) to use")
+	fs.Parse(args)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	srv := mcpserver.New(mcpserver.NewClient(*url), version())
+	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil && ctx.Err() == nil {
+		return err
+	}
+	return nil
+}
+
+// version is the module version the binary was built from, or "dev".
+func version() string {
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return "dev"
 }
 
 func up(args []string) error {
