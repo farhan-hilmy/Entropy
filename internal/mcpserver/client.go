@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,6 +19,20 @@ import (
 type Client struct {
 	base string
 	http *http.Client
+
+	// Starter, if set, starts Entropy when nothing answers at base.
+	Starter *Starter
+	mu      sync.Mutex
+	notice  string // said once in the next tool result, e.g. that Entropy was started
+}
+
+// TakeNotice returns the pending notice, once.
+func (c *Client) TakeNotice() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := c.notice
+	c.notice = ""
+	return n
 }
 
 // NewClient talks to the Entropy at base, e.g. http://127.0.0.1:7400.
@@ -45,27 +61,46 @@ func (e *notRunning) Error() string {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
-	var rd io.Reader
+	var payload []byte
 	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
+		var err error
+		if payload, err = json.Marshal(body); err != nil {
 			return err
 		}
-		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rd)
-	if err != nil {
-		return err
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	res, err := c.http.Do(req)
-	if err != nil {
-		var ue *url.Error
-		if errors.As(err, &ue) && ctx.Err() == nil {
-			return &notRunning{c.base, ue.Err}
+	send := func() (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(payload))
+		if err != nil {
+			return nil, err
 		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		res, err := c.http.Do(req)
+		if err != nil {
+			var ue *url.Error
+			if errors.As(err, &ue) && ctx.Err() == nil && refused(ue.Err) {
+				return nil, &notRunning{c.base, ue.Err}
+			}
+			return nil, err
+		}
+		return res, nil
+	}
+	res, err := send()
+	var nr *notRunning
+	if errors.As(err, &nr) && c.Starter != nil {
+		started, serr := c.Starter.Ensure(ctx, c.base)
+		if serr != nil {
+			return fmt.Errorf("Entropy isn't running at %s, and starting it failed: %w", c.base, serr)
+		}
+		if started {
+			c.mu.Lock()
+			c.notice = fmt.Sprintf("(Entropy wasn't running, so it was started for this session with %s; it stops when the session ends. UI: %s)", c.Starter.Config, c.base)
+			c.mu.Unlock()
+		}
+		res, err = send()
+	}
+	if err != nil {
 		return err
 	}
 	defer res.Body.Close()
@@ -93,6 +128,13 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		return nil
 	}
 	return json.Unmarshal(data, out)
+}
+
+// refused reports whether err is from connecting (nothing listens there), as
+// opposed to an Entropy that answered slowly or broke off.
+func refused(err error) bool {
+	var op *net.OpError
+	return errors.As(err, &op) && op.Op == "dial"
 }
 
 func esc(s string) string { return url.PathEscape(s) }

@@ -515,18 +515,31 @@ Toxiproxy answers.
 
 `entropy mcp` offers Entropy to agents such as Claude Code as MCP tools, so an
 agent can run an experiment, read why it failed, fix the service and run it
-again. It talks to the running `entropy up`, so start that first.
+again. It talks to `entropy up`, and starts it if it isn't running.
 
 Build Entropy, then add it to Claude Code (once, from any folder):
 
 ```sh
 go build -o entropy.exe ./cmd/entropy
-claude mcp add entropy -- D:/path/to/entropy.exe mcp
+claude mcp add entropy -- D:/path/to/entropy.exe mcp -config D:/path/to/entropy.yaml
 ```
 
+That line is the whole setup:
+
+- **Entropy already running** (you started `entropy up`, or have the UI open):
+  the agent uses it.
+- **Not running:** the agent's first Entropy tool call starts `entropy up`
+  with that `entropy.yaml`, in its folder, so it uses the same database and
+  run history as when you start it yourself. The tool result says it was
+  started, with the UI's address. It **stops when the agent session ends**
+  (even if the agent is killed), removing every fault; its log is
+  `.entropy/entropy-up.log` next to `entropy.yaml`.
+- Without `-config`, it looks for `entropy.yaml` in the folder the agent runs
+  in. `-autostart=false` turns starting off.
+
 Use `--scope project` to put it in the repo's `.mcp.json` for the whole team,
-and `-url http://127.0.0.1:7500` after `mcp` if Entropy runs on another port.
-Check it with `/mcp` in Claude Code.
+and `-url http://127.0.0.1:7500` after `mcp` if Entropy runs on another port
+(it's only started for a local URL). Check it with `/mcp` in Claude Code.
 
 | Tool | What it does |
 |---|---|
@@ -570,7 +583,9 @@ Check it with `/mcp` in Claude Code.
 | Run: *inconclusive: … doesn't seem to reach redis through the proxy* | Preflight verified the route with one of the experiment's commands, or the health check. Point the service at the proxy, or make sure that request uses the dependency. |
 | Run: *inconclusive: the steady state didn't hold before any fault* | A `baseline` assertion failed: the service wasn't healthy to begin with. Its report shows what it got. |
 | Run: *another experiment is running* | One runs at a time. Wait, or open it from the banner on Experiments and press **Stop run**. |
-| Agent: *Entropy isn't running at http://127.0.0.1:7400* | Start `entropy up` in the folder with `entropy.yaml`. If it runs on another port, add `-url` to the `claude mcp add` line. |
+| Agent: *… there's no entropy.yaml in … to start it with* | Add `-config D:/path/to/entropy.yaml` after `mcp` in the `claude mcp add` line, or start `entropy up` yourself. |
+| Agent: *starting it failed: started entropy up, but it stopped: …* | The rest of the message is Entropy's own error (e.g. the config is invalid, or the port is taken). The full log is `.entropy/entropy-up.log` next to `entropy.yaml`. |
+| Agent: *Entropy isn't running at …* | Started with `-autostart=false`, or `-url` isn't on this machine: start that Entropy yourself. |
 | API answers 403: *refused a request addressed to "…"* | Entropy only answers requests addressed to `localhost` or `127.0.0.1` (or the exact `-addr` host), so a web page can't reach it through a DNS trick. Use one of those in the URL. |
 | API answers 403: *refused a change sent by a web page on another site* | Changes (POST, PATCH, DELETE) are refused when a browser sends them from another site, so a page you visit can't start a run or break a dependency. Entropy's UI, curl, scripts and agents are not affected. |
 

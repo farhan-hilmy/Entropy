@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -34,9 +35,10 @@ const usage = `Usage:
   entropy up        [-config entropy.yaml] [-addr 127.0.0.1:7400] [-db .entropy/entropy.db]
   entropy validate  [-config entropy.yaml]
   entropy run       [-config entropy.yaml] <service>/<command>
-  entropy mcp       [-url http://127.0.0.1:7400]
-                    MCP server for AI agents, over stdio; needs a running entropy up.
-                    Claude Code: claude mcp add entropy -- entropy mcp
+  entropy mcp       [-url http://127.0.0.1:7400] [-config entropy.yaml] [-autostart=false]
+                    MCP server for AI agents, over stdio. Starts entropy up with -config
+                    when it isn't running, for as long as the agent session lasts.
+                    Claude Code: claude mcp add entropy -- entropy mcp -config D:/path/entropy.yaml
 `
 
 func main() {
@@ -117,14 +119,34 @@ func runCommand(args []string) error {
 // serveMCP serves Entropy's MCP tools over stdin and stdout, for an agent
 // that starts it (e.g. Claude Code). Each tool calls the Entropy at -url, so
 // stdout carries only the protocol; logs go to stderr.
+//
+// When nothing answers at a local -url, the first tool call starts entropy up
+// with -config (default: entropy.yaml in the current folder), in that file's
+// folder. It runs as long as this command does, then stops cleanly.
 func serveMCP(args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ExitOnError)
-	url := fs.String("url", "http://127.0.0.1:7400", "the running Entropy (entropy up) to use")
+	url := fs.String("url", "http://127.0.0.1:7400", "the Entropy (entropy up) to use")
+	configPath := fs.String("config", "", "entropy.yaml to start Entropy with when it isn't running (default: entropy.yaml in the current folder)")
+	autostart := fs.Bool("autostart", true, "start entropy up when nothing answers at a local -url")
 	fs.Parse(args)
+
+	client := mcpserver.NewClient(*url)
+	if *autostart {
+		exe, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		if client.Starter, err = mcpserver.NewStarter(*url, exe, *configPath); err != nil {
+			return err
+		}
+		if client.Starter != nil {
+			defer client.Starter.Stop(10 * time.Second) // let it remove its faults
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	srv := mcpserver.New(mcpserver.NewClient(*url), version())
+	srv := mcpserver.New(client, version())
 	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil && ctx.Err() == nil {
 		return err
 	}
@@ -144,11 +166,23 @@ func up(args []string) error {
 	configPath := fs.String("config", "entropy.yaml", "path to the config file")
 	addr := fs.String("addr", "127.0.0.1:7400", "address for the UI and API (local only by default)")
 	dbPath := fs.String("db", ".entropy/entropy.db", "path to the SQLite database")
+	// Set by entropy mcp when it starts Entropy: stop (cleanly, removing every
+	// fault) when stdin closes, i.e. when that agent session ends.
+	stopWithStdin := fs.Bool("stop-with-stdin", false, "stop when stdin closes (used by entropy mcp)")
 	fs.Parse(args)
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *stopWithStdin {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		go func() {
+			io.Copy(io.Discard, os.Stdin)
+			log.Info("stdin closed: the agent session that started Entropy ended, stopping")
+			cancel()
+		}()
+	}
 
 	// Claim the port first, so a busy port fails before anything else starts.
 	ln, err := net.Listen("tcp", *addr)

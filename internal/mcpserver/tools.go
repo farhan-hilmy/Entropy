@@ -68,6 +68,20 @@ func New(c *Client, version string) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{Name: "run_command", Annotations: &mcp.ToolAnnotations{OpenWorldHint: &no},
 		Description: "Runs one of a service's commands (from entropy.yaml, e.g. a request to the service) once, without any fault, and returns its exit code and output. A quick check, e.g. that a fix still works normally, before a full run."},
 		t.runCommand)
+
+	// A notice from the client (e.g. "Entropy was started for this
+	// session") goes first in the next tool result, once.
+	s.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			res, err := next(ctx, method, req)
+			if r, ok := res.(*mcp.CallToolResult); ok && err == nil {
+				if n := c.TakeNotice(); n != "" {
+					r.Content = append([]mcp.Content{&mcp.TextContent{Text: n}}, r.Content...)
+				}
+			}
+			return res, err
+		}
+	})
 	return s
 }
 

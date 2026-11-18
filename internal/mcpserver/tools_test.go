@@ -137,7 +137,18 @@ func (f *fakeEntropy) handler() http.Handler {
 // connect starts the MCP server for the API at base and returns a client session.
 func connect(t *testing.T, base string, opts *mcp.ClientOptions) *mcp.ClientSession {
 	t.Helper()
-	srv := New(NewClient(base), "test")
+	return connectWith(t, NewClient(base), opts)
+}
+
+// connectClient starts the MCP server on c and returns a client session.
+func connectClient(t *testing.T, c *Client) *mcp.ClientSession {
+	t.Helper()
+	return connectWith(t, c, nil)
+}
+
+func connectWith(t *testing.T, c *Client, opts *mcp.ClientOptions) *mcp.ClientSession {
+	t.Helper()
+	srv := New(c, "test")
 	st, ct := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	ss, err := srv.Connect(ctx, st, nil)
