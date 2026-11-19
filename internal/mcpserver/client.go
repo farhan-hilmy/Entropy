@@ -154,16 +154,25 @@ func (c *Client) ExperimentSource(ctx context.Context, name string) (Source, err
 	return v, c.do(ctx, "GET", "/api/experiments/"+esc(name)+"/source", nil, &v)
 }
 
-func (c *Client) Config(ctx context.Context) (Source, error) {
-	var v Source
+// Config is the config file as written (no defaults), and its hash.
+func (c *Client) Config(ctx context.Context) (ConfigSnapshot, error) {
+	var v ConfigSnapshot
 	return v, c.do(ctx, "GET", "/api/config", nil, &v)
 }
 
-// SaveExperiment replaces the experiment called name with yaml (name "" adds it).
-func (c *Client) SaveExperiment(ctx context.Context, hash, name, yaml string) (EditResult, error) {
+// Edit applies one config edit (one key: experiment, addDependency, …) to
+// the file with this hash, as the UI does (PATCH /api/config).
+func (c *Client) Edit(ctx context.Context, hash, part string, value any) (EditResult, error) {
 	var v EditResult
-	body := map[string]any{"hash": hash, "experiment": map[string]string{"name": name, "yaml": yaml}}
-	return v, c.do(ctx, "PATCH", "/api/config", body, &v)
+	return v, c.do(ctx, "PATCH", "/api/config", map[string]any{"hash": hash, part: value}, &v)
+}
+
+// VerifyRoute runs one of the service's requests (command "" = its health
+// check) and reports whether it went through the dependency's proxy.
+func (c *Client) VerifyRoute(ctx context.Context, dependency, service, command string) (RouteCheck, error) {
+	var v RouteCheck
+	body := map[string]string{"service": service, "command": command}
+	return v, c.do(ctx, "POST", "/api/dependencies/"+esc(dependency)+"/verify", body, &v)
 }
 
 func (c *Client) StartRun(ctx context.Context, experiment string) (Run, error) {
@@ -336,6 +345,43 @@ func (r Run) Done() bool { return r.State == "done" }
 type Source struct {
 	Hash string `json:"hash"`
 	YAML string `json:"yaml"`
+}
+
+// ConfigSnapshot is the config file as written: no defaults, so a field the
+// file leaves out is empty.
+type ConfigSnapshot struct {
+	Hash   string `json:"hash"`
+	Config struct {
+		Dependencies []RawDependency `json:"dependencies"`
+		Services     []RawService    `json:"services"`
+	} `json:"config"`
+}
+
+type RawDependency struct {
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Address  string `json:"address"`
+	Upstream string `json:"upstream"`
+	Listen   string `json:"listen"`
+	Redirect bool   `json:"redirect"`
+}
+
+type RawService struct {
+	Name           string   `json:"name"`
+	BaseURL        string   `json:"baseUrl"`
+	HealthCheck    string   `json:"healthCheck"`
+	HealthCommand  string   `json:"healthCommand"`
+	HealthEverySec int      `json:"healthEverySec"`
+	Uses           []string `json:"uses"`
+}
+
+type RouteCheck struct {
+	State     string `json:"state"` // verified | not_seen | unknown
+	Detail    string `json:"detail"`
+	Trigger   string `json:"trigger"`
+	NormalMs  int64  `json:"normalMs"`
+	SlowedMs  int64  `json:"slowedMs"`
+	LatencyMs int64  `json:"latencyMs"`
 }
 
 type EditResult struct {

@@ -322,6 +322,36 @@ func TestTools(t *testing.T) {
 	}
 }
 
+func TestSuiteReport(t *testing.T) {
+	api := httptest.NewServer((&fakeEntropy{}).handler())
+	defer api.Close()
+	out, isErr := call(t, connect(t, api.URL, nil), "suite_report", nil)
+	if isErr {
+		t.Fatal(out)
+	}
+	contains(t, "suite_report", out,
+		"dependency  outage\n", "redis       ✗ failed (redis-outage)",
+		"Not passed (latest run):\n- redis-outage (run r1): FAILED: 1 of 2 assertions failed")
+	if strings.Contains(out, "gone") {
+		t.Errorf("shows a missing experiment:\n%s", out)
+	}
+}
+
+func TestPrompts(t *testing.T) {
+	api := httptest.NewServer((&fakeEntropy{}).handler())
+	defer api.Close()
+	cs := connect(t, api.URL, nil)
+	for name, want := range map[string]string{"setup": "Set Entropy up for oauth", "suite": "EXPECTED BEHAVIOUR"} {
+		res, err := cs.GetPrompt(context.Background(), &mcp.GetPromptParams{Name: name, Arguments: map[string]string{"service": "oauth"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := res.Messages[0].Content.(*mcp.TextContent).Text; !strings.Contains(got, want) {
+			t.Errorf("prompt %s: missing %q in:\n%s", name, want, got)
+		}
+	}
+}
+
 func TestEntropyNotRunning(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

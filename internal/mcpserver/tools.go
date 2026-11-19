@@ -68,6 +68,7 @@ func New(c *Client, version string) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{Name: "run_command", Annotations: &mcp.ToolAnnotations{OpenWorldHint: &no},
 		Description: "Runs one of a service's commands (from entropy.yaml, e.g. a request to the service) once, without any fault, and returns its exit code and output. A quick check, e.g. that a fix still works normally, before a full run."},
 		t.runCommand)
+	t.registerSetup(s)
 
 	// A notice from the client (e.g. "Entropy was started for this
 	// session") goes first in the next tool result, once.
@@ -439,31 +440,42 @@ type saveExperimentInput struct {
 	YAML string `json:"yaml" jsonschema:"the whole experiment as YAML, keys at column 0 (name:, faults:, triggers:, assertions:, …), as get_experiment gives it"`
 }
 
-func (t *tools) saveExperiment(ctx context.Context, _ *mcp.CallToolRequest, in saveExperimentInput) (*mcp.CallToolResult, any, error) {
-	// An agent may save several experiments at once; one at a time keeps
-	// them from tripping over each other's hash.
+// edit saves one config edit the way the UI does: only that part's lines
+// change, and the whole file is checked first. build makes the edit from the
+// file as it is now (update_* tools merge into the current values).
+//
+// Edits from one agent go one at a time, so parallel calls don't trip over
+// each other's hash. The hash guards against the file changing between
+// reading and writing it; every edit names its part and is checked again, so
+// if something else changed the file in between, editing on top of that is
+// safe: retry once with the new content.
+func (t *tools) edit(ctx context.Context, part string, build func(ConfigSnapshot) (any, error)) (EditResult, error) {
 	t.saveMu.Lock()
 	defer t.saveMu.Unlock()
-
-	// The hash guards against the file changing between reading and writing
-	// it. The edit replaces just this experiment's lines with the whole
-	// experiment given, and the file is checked again, so if something else
-	// changed the file in between, saving on top of that is safe: retry once.
-	var res EditResult
 	for attempt := 0; ; attempt++ {
 		cfg, err := t.c.Config(ctx)
 		if err != nil {
-			return nil, nil, err
+			return EditResult{}, err
 		}
-		res, err = t.c.SaveExperiment(ctx, cfg.Hash, in.Name, in.YAML)
+		value, err := build(cfg)
+		if err != nil {
+			return EditResult{}, err
+		}
+		res, err := t.c.Edit(ctx, cfg.Hash, part, value)
 		var ae *APIError
 		if err != nil && errors.As(err, &ae) && ae.Status == http.StatusConflict && attempt == 0 {
 			continue
 		}
-		if err != nil {
-			return nil, nil, err
-		}
-		break
+		return res, err
+	}
+}
+
+func (t *tools) saveExperiment(ctx context.Context, _ *mcp.CallToolRequest, in saveExperimentInput) (*mcp.CallToolResult, any, error) {
+	res, err := t.edit(ctx, "experiment", func(ConfigSnapshot) (any, error) {
+		return map[string]string{"name": in.Name, "yaml": in.YAML}, nil
+	})
+	if err != nil {
+		return nil, nil, err
 	}
 	var b strings.Builder
 	saved := yamlName(in.YAML)

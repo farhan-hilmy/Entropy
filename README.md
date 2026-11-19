@@ -132,8 +132,10 @@ You can edit the file, or use the UI:
 The UI writes to `entropy.yaml` and syncs. It changes only the values you
 edited, so your comments and layout stay. It refuses to save if the file
 changed since you opened the form, or if the result would be invalid.
-**Commands can only be added or changed in the file**, because Entropy runs
-them on your machine. Removing something is also done in the file.
+**Commands can't be added or changed in the UI**, because Entropy runs them
+on your machine: edit the file, or let an agent add them through `entropy
+mcp` (section 8), which shows you the command line first. Removing
+something is also done in the file.
 
 ### Add a dependency
 
@@ -551,13 +553,31 @@ and `-url http://127.0.0.1:7500` after `mcp` if Entropy runs on another port
 | `stop_run`, `stop_all_faults` | the safety exits |
 | `save_experiment` | the editor's safe save: only that experiment's lines change, an invalid one changes nothing |
 | `run_command` | runs a service's command once, without faults, e.g. to check a fix |
+| `config_reference` | how `entropy.yaml` works, and good defaults for a suite per dependency |
+| `add_dependency`, `update_dependency`, `add_service`, `update_service`, `add_command` | set Entropy up with the same safe saves as the UI (`update_*` keep the fields not given) |
+| `verify_route` | checks a service really reaches a dependency through the proxy (**Verify** in the UI) |
+| `suite_report` | each dependency against each fault type, with the latest verdicts, and what no experiment covers |
+
+Two prompts guide the agent through the whole job (in Claude Code:
+`/mcp__entropy__setup` and `/mcp__entropy__suite`, with a service as the
+argument):
+
+- **setup:** reads the service's code and config, finds its dependencies,
+  proposes the entries, the commands and the change to the service's own
+  config (to use the proxy addresses), saves them once you confirm, and
+  checks every route with `verify_route`.
+- **suite:** proposes an experiment per dependency and fault (outage and
+  latency for each, flap for long-lived connections) with the **expected
+  behaviour in plain words for you to confirm**, saves them, runs them one at
+  a time, and shows `suite_report` with why each failure happened.
 
 - **Agents can't start a fault on their own:** every fault they cause is part of
   a run, with a verdict and Entropy's limits (`maxDurationSec`, one run at a
   time, faults always removed).
 - A run really breaks the dependency for every service using it. Claude Code
   asks before each tool call unless you allow it; allowing the read tools and
-  the stop tools is safe.
+  the stop tools is safe. Don't allow `add_command` without asking: a command
+  is code Entropy runs on your machine.
 - Try: *"Run redis-outage-oauth with Entropy. If it fails, find out why in the
   oauth code, fix it, and rerun until it passes."*
 
@@ -642,7 +662,7 @@ web/                React + TypeScript + Vite UI
 | GET | `/api/environment` | Environment, dependencies, services and statuses |
 | POST | `/api/sync` | Re-read `entropy.yaml` (422 with errors if invalid) |
 | GET | `/api/config` | `entropy.yaml` as written (no defaults), plus a `hash` of its content |
-| PATCH | `/api/config` | Save one change and sync: `{hash, <part>}` with one of `environment`, `dependency`, `service`, `addDependency`, `addService`, `experiment` (`{name, yaml}`: replaces that experiment, or adds one when `name` is empty), `removeExperiment` (`{name}`), `experimentCap` (`{name, maxDurationSec}`: sets only that line). 409 if the file changed since `hash`, 422 if the result is invalid |
+| PATCH | `/api/config` | Save one change and sync: `{hash, <part>}` with one of `environment`, `dependency`, `service`, `addDependency`, `addService`, `addCommand` (`{service, name, run, cwd, timeoutSec}`; not in the UI), `experiment` (`{name, yaml}`: replaces that experiment, or adds one when `name` is empty), `removeExperiment` (`{name}`), `experimentCap` (`{name, maxDurationSec}`: sets only that line). 409 if the file changed since `hash`, 422 if the result is invalid |
 | GET | `/api/experiments/{name}/source` | One experiment as written in `entropy.yaml`, comments included, plus the file's `hash`, for the editor |
 | POST | `/api/dependencies/{name}/fault` | Apply a fault: `{type, durationSec, …options}` (see step 5: `latencyMs`, `jitterMs`, `timeoutMs`, `downSec`, `upSec`). 409 if it already has one, 422 if invalid |
 | DELETE | `/api/dependencies/{name}/fault` | Stop the dependency's fault now |

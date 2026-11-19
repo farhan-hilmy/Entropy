@@ -96,6 +96,19 @@ type NewService struct {
 	Uses        []string `json:"uses"`
 }
 
+// NewCommand adds a command to a service. Only the API offers it (for agents
+// setting Entropy up through entropy mcp), not the UI: a command is code that
+// Entropy runs on this machine. Locally that's no new power, since whatever
+// can call the API (see localguard) can also write the file; an Entropy shared
+// over the network must not accept it without login.
+type NewCommand struct {
+	Service    string `json:"service"`
+	Name       string `json:"name"`
+	Run        string `json:"run"`
+	Cwd        string `json:"cwd"`
+	TimeoutSec int    `json:"timeoutSec"`
+}
+
 // ExperimentText is one experiment as YAML, as the experiment editor shows
 // it: a mapping (name, faults, triggers, …), comments included. Experiments
 // only name commands from the file, so editing them can't add code to run.
@@ -127,6 +140,7 @@ type Edit struct {
 	Service          *ServiceFields     `json:"service,omitempty"`
 	AddDependency    *NewDependency     `json:"addDependency,omitempty"`
 	AddService       *NewService        `json:"addService,omitempty"`
+	AddCommand       *NewCommand        `json:"addCommand,omitempty"`
 	Experiment       *ExperimentText    `json:"experiment,omitempty"`
 	RemoveExperiment *Named             `json:"removeExperiment,omitempty"`
 	ExperimentCap    *ExperimentCap     `json:"experimentCap,omitempty"`
@@ -177,15 +191,34 @@ func Apply(path, hash string, e Edit) (string, error) {
 func (e Edit) apply(cfg *Config, doc *yaml.Node, ed *editor) error {
 	set := 0
 	for _, part := range []bool{e.Environment != nil, e.Dependency != nil, e.Service != nil, e.AddDependency != nil, e.AddService != nil,
-		e.Experiment != nil, e.RemoveExperiment != nil, e.ExperimentCap != nil} {
+		e.AddCommand != nil, e.Experiment != nil, e.RemoveExperiment != nil, e.ExperimentCap != nil} {
 		if part {
 			set++
 		}
 	}
 	if set != 1 {
-		return errors.New("an edit sets exactly one of environment, dependency, service, addDependency, addService, experiment removeExperiment or experimentCap")
+		return errors.New("an edit sets exactly one of environment, dependency, service, addDependency, addService, addCommand, experiment, removeExperiment or experimentCap")
 	}
 	switch {
+	case e.AddCommand != nil:
+		f := e.AddCommand
+		m, err := item(doc, "services", "service", f.Service)
+		if err != nil {
+			return err
+		}
+		i := slices.IndexFunc(cfg.Services, func(s Service) bool { return s.Name == f.Service })
+		cfg.Services[i].Commands = append(cfg.Services[i].Commands, Command{Name: f.Name, Run: f.Run, Cwd: f.Cwd, TimeoutSec: f.TimeoutSec})
+		timeout := ""
+		if f.TimeoutSec != 0 {
+			timeout = strconv.Itoa(f.TimeoutSec)
+		}
+		return ed.appendItem(m, "commands", []field{
+			{"name", required(f.Name)},
+			{"run", required(f.Run)},
+			{"cwd", optional(f.Cwd)},
+			{"timeoutSec", timeout},
+		})
+
 	case e.Experiment != nil:
 		return setExperiment(cfg, doc, ed, *e.Experiment)
 
@@ -452,10 +485,20 @@ func (ed *editor) appendItem(doc *yaml.Node, section string, fields []field) err
 
 // appendLines adds an entry to the end of the doc's list section; render
 // gives its lines with the dash at column dash and keys at column keys,
-// matching the entries already there.
+// matching the entries already there. doc is the file's top-level mapping,
+// or a mapping inside it (e.g. a service, for its commands).
 func (ed *editor) appendLines(doc *yaml.Node, section string, render func(dash, keys int) []string) error {
 	k, seq := lookup(doc, section)
+	nested := doc.Column > 1
 	switch {
+	case seq == nil && nested:
+		// A new list under the mapping's last key, at its keys' column.
+		if doc.Style&yaml.FlowStyle != 0 || len(doc.Content) == 0 {
+			return ErrUnsafe
+		}
+		col := doc.Content[0].Column - 1
+		after := lastLine(doc)
+		ed.replace(after+1, after, append([]string{strings.Repeat(" ", col) + section + ":"}, render(col+2, col+4)...)...)
 	case seq == nil:
 		last := len(ed.lines)
 		if ed.lines[last-1] == "" { // the file ends with a line break
