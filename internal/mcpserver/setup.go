@@ -88,7 +88,7 @@ func (t *tools) saved(ctx context.Context, what string, res EditResult, extra fu
 }
 
 type addDependencyInput struct {
-	Name     string `json:"name" jsonschema:"a short name, e.g. redis, mongodb, cidm"`
+	Name     string `json:"name" jsonschema:"a short name, e.g. redis, mongodb, payments-api"`
 	Kind     string `json:"kind" jsonschema:"redis, mongodb, postgres, rabbitmq, http or https"`
 	Address  string `json:"address" jsonschema:"host:port the service will connect to: the proxy, e.g. 127.0.0.1:16379"`
 	Upstream string `json:"upstream" jsonschema:"host:port of the real dependency, e.g. 127.0.0.1:6379, or auto:6379 for a container on this machine"`

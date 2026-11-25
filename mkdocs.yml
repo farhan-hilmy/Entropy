@@ -1,0 +1,55 @@
+site_name: Entropy
+site_description: See how your services behave when their dependencies fail.
+site_url: https://farhan-hilmy.github.io/Entropy/
+repo_url: https://github.com/farhan-hilmy/Entropy
+repo_name: farhan-hilmy/Entropy
+edit_uri: edit/main/docs/
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Set up your services: setup.md
+  - Statuses and faults: faults.md
+  - Experiments: experiments.md
+  - Agents (MCP): agents.md
+  - Troubleshooting: troubleshooting.md
+  - Reference:
+      - REST API: api.md
+      - Contributing: contributing.md
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+
+markdown_extensions:
+  - admonition
+  - tables
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+# Broken links and anchors fail the build (mkdocs build --strict).
+validation:
+  links:
+    anchors: warn

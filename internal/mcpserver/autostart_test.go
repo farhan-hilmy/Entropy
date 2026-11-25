@@ -59,7 +59,14 @@ func freeURL(t *testing.T) string {
 
 func fakeStarter(t *testing.T, base, mode string) (*Starter, string) {
 	t.Helper()
-	dir := t.TempDir()
+	// Not t.TempDir: on Windows the started process's log can still be held
+	// for a moment after it exits, and t.TempDir's cleanup then fails the
+	// test. Leftovers are harmless.
+	dir, err := os.MkdirTemp("", "entropy-autostart-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
 	cfg := filepath.Join(dir, "entropy.yaml")
 	os.WriteFile(cfg, []byte("environment: {name: x}\n"), 0o644)
 	t.Setenv("ENTROPY_FAKE_UP", mode) // inherited by the started process
