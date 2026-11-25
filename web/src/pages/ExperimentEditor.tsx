@@ -197,7 +197,8 @@ function Reference({ env }: { env: Environment }) {
       </ul>
       <p className="muted small">
         <code>expect</code>: <code>exitCode</code>, <code>outputContains</code> (commands); <code>status</code>,{' '}
-        <code>bodyContains</code> (requests). The README's "Experiments" section has the details.
+        <code>bodyContains</code> (requests); <code>maxMs</code> (both: the longest a result may take). A request with no
+        answer before its phase ends fails. The README's "Experiments" section has the details.
       </p>
     </aside>
   )

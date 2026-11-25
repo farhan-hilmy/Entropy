@@ -74,6 +74,7 @@ type runFixture struct {
 	viaProxy      bool
 	outageStatus  int
 	baselineError bool
+	hangOnOutage  bool // during an outage, wait until it's over instead of answering
 }
 
 func newRunFixture(t *testing.T, exp config.Experiment) *runFixture {
@@ -96,6 +97,10 @@ func newRunFixture(t *testing.T, exp config.Experiment) *runFixture {
 		down, slow := f.proxy.state()
 		if slow {
 			time.Sleep(routeProbeLatency)
+		}
+		for f.hangOnOutage && down && r.Context().Err() == nil {
+			time.Sleep(20 * time.Millisecond)
+			down, _ = f.proxy.state()
 		}
 		if down {
 			http.Error(w, "redis unavailable", f.outageStatus)
@@ -236,6 +241,58 @@ func TestDuringRequestsOnlyCountWhileTheFaultIsOn(t *testing.T) {
 	if !strings.Contains(timeline(r), "was cut off and doesn't count: the faults ended") &&
 		strings.Count(timeline(r), "response: during") >= 20 {
 		t.Errorf("the during requests should stop when the fault ends\n%s", timeline(r))
+	}
+}
+
+// A request that gets no answer for the whole fault is the worst result, not
+// a missing one: the run fails, it isn't inconclusive.
+func TestRequestHungThroughTheFaultFails(t *testing.T) {
+	exp := outageExperiment()
+	exp.Faults[0].DurationSec = 2
+	exp.Triggers[1].Repeat = 1
+	exp.Assertions[1] = config.Assertion{Type: "response", Trigger: "during", Expect: config.Expect{Status: 503}}
+	f := newRunFixture(t, exp)
+	f.hangOnOutage = true
+	r := f.runToEnd(t)
+	if r.Verdict != VerdictFailed || !strings.Contains(r.Reason, "no answer") {
+		t.Fatalf("verdict %s (%s); want failed with no answer\n%s", r.Verdict, r.Reason, timeline(r))
+	}
+	// Cut off, or answered a moment after the fault was removed: either way no
+	// answer while it was on.
+	if !strings.Contains(timeline(r), "response: during #1 (GET oauth/token): no answer") {
+		t.Errorf("the timeline should show the hung request\n%s", timeline(r))
+	}
+	f.noFaultLeft(t)
+}
+
+func TestMaxMs(t *testing.T) {
+	for _, c := range []struct {
+		maxMs   int
+		verdict string
+	}{{100, VerdictFailed}, {5000, VerdictPassed}} {
+		exp := outageExperiment()
+		exp.Faults[0].Spec = faults.Spec{Type: "latency", DurationSec: 1, LatencyMs: 200}
+		exp.Triggers[1].Repeat = 1
+		// The service answers 200 through the slow proxy, after routeProbeLatency (200 ms).
+		exp.Assertions[1] = config.Assertion{Type: "response", Trigger: "during", Expect: config.Expect{Status: 200, MaxMs: c.maxMs}}
+		f := newRunFixture(t, exp)
+		r := f.runToEnd(t)
+		if r.Verdict != c.verdict {
+			t.Errorf("maxMs %d: verdict %s (%s), want %s\n%s", c.maxMs, r.Verdict, r.Reason, c.verdict, timeline(r))
+		}
+		if c.verdict == VerdictFailed && !strings.Contains(r.Reason, "within 100 ms") {
+			t.Errorf("maxMs %d: the reason should name the limit: %s", c.maxMs, r.Reason)
+		}
+	}
+}
+
+func TestSummaryLine(t *testing.T) {
+	bruno := "Oauth Service\\Access Token B2B (500 Internal Server Error) - 52 ms\nafter-datanya: {\n  responseCode: '5007301'\n}\n"
+	if got := summaryLine(bruno); got != `Oauth Service\Access Token B2B (500 Internal Server Error) - 52 ms` {
+		t.Errorf("Bruno: %q", got)
+	}
+	if got := summaryLine("connecting\nok done\n"); got != "ok done" {
+		t.Errorf("plain: %q", got)
 	}
 }
 

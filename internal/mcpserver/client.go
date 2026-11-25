@@ -371,8 +371,16 @@ type RawService struct {
 	BaseURL        string   `json:"baseUrl"`
 	HealthCheck    string   `json:"healthCheck"`
 	HealthCommand  string   `json:"healthCommand"`
-	HealthEverySec int      `json:"healthEverySec"`
-	Uses           []string `json:"uses"`
+	HealthEverySec int          `json:"healthEverySec"`
+	Uses           []string     `json:"uses"`
+	Commands       []RawCommand `json:"commands"`
+}
+
+type RawCommand struct {
+	Name       string `json:"name"`
+	Run        string `json:"run"`
+	Cwd        string `json:"cwd"`
+	TimeoutSec int    `json:"timeoutSec"`
 }
 
 type RouteCheck struct {

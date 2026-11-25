@@ -146,6 +146,23 @@ func lastLine(output string) string {
 	return strings.TrimSpace(lines[len(lines)-1])
 }
 
+// summaryLine is what a command's output says about its result: the HTTP
+// request lines it printed (e.g. Bruno's `Access Token B2B (500 Internal
+// Server Error) - 52 ms`), else its last meaningful line. The last line alone
+// is often a script's log (a closing brace, a JSON dump), not the result.
+func summaryLine(output string) string {
+	var req []string
+	for line := range strings.SplitSeq(output, "\n") {
+		if line = strings.TrimSpace(line); brunoRequestTime.MatchString(line) {
+			req = append(req, line)
+		}
+	}
+	if len(req) > 0 {
+		return strings.Join(req, "; ")
+	}
+	return lastLine(output)
+}
+
 // isTableLine reports whether line is a border or row of a box-drawn table.
 func isTableLine(line string) bool {
 	r, _ := utf8.DecodeRuneInString(line)

@@ -418,7 +418,14 @@ experiments:
 
 A trigger is either one of the service's commands (`service/command`; expect
 `exitCode`, `outputContains`) or an HTTP `request` to its `baseUrl` (expect
-`status`, `bodyContains`). A run goes:
+`status`, `bodyContains`). Both can also expect `maxMs`, the longest a result
+may take, e.g. "a clean error within 10 s, not a hang":
+
+```yaml
+      - { type: response, trigger: during, expect: { status: 503, maxMs: 10000 } }
+```
+
+A run goes:
 
 1. **Preflight**, cheapest first:
    - each service is healthy: a health check that failed in the last
@@ -438,9 +445,16 @@ A trigger is either one of the service's commands (`service/command`; expect
 2. **Baseline**: the `baseline` triggers run; their assertions must hold (the
    steady state), or the run stops before any fault.
 3. **During**: the faults are applied, then the `during` triggers run. Only
-   results that finish while a fault is on count; a request still going
-   when the faults end is cut off, and no new one starts. Make the fault
-   long enough for the requests you want (e.g. a Bruno run takes seconds).
+   results that finish while a fault is on count, and no new request
+   starts once the faults end. A request still waiting when they end:
+   - if it waited at least half the phase (or longer than a `maxMs` on it),
+     it **hung**: its result is *"no answer within N s"*, which matches no
+     expectation, so its assertions fail. The same goes for one that only
+     got its answer once the faults were gone.
+   - if it started near the end, it just ran out of time and doesn't count.
+
+   Make the fault long enough for the requests you want (e.g. a Bruno run
+   takes seconds). The same rule applies when the recovery window ends.
 4. **Restore**: the faults are removed when their time is up.
 5. **After**: the `after` triggers run and recovery is watched, for up to
    `recoveryWindowSec`.
@@ -554,7 +568,7 @@ and `-url http://127.0.0.1:7500` after `mcp` if Entropy runs on another port
 | `save_experiment` | the editor's safe save: only that experiment's lines change, an invalid one changes nothing |
 | `run_command` | runs a service's command once, without faults, e.g. to check a fix |
 | `config_reference` | how `entropy.yaml` works, and good defaults for a suite per dependency |
-| `add_dependency`, `update_dependency`, `add_service`, `update_service`, `add_command` | set Entropy up with the same safe saves as the UI (`update_*` keep the fields not given) |
+| `add_dependency`, `update_dependency`, `add_service`, `update_service`, `add_command`, `update_command`, `remove_command` | set Entropy up with the same safe saves as the UI (`update_*` keep the fields not given; a command still in use can't be removed) |
 | `verify_route` | checks a service really reaches a dependency through the proxy (**Verify** in the UI) |
 | `suite_report` | each dependency against each fault type, with the latest verdicts, and what no experiment covers |
 
@@ -662,7 +676,7 @@ web/                React + TypeScript + Vite UI
 | GET | `/api/environment` | Environment, dependencies, services and statuses |
 | POST | `/api/sync` | Re-read `entropy.yaml` (422 with errors if invalid) |
 | GET | `/api/config` | `entropy.yaml` as written (no defaults), plus a `hash` of its content |
-| PATCH | `/api/config` | Save one change and sync: `{hash, <part>}` with one of `environment`, `dependency`, `service`, `addDependency`, `addService`, `addCommand` (`{service, name, run, cwd, timeoutSec}`; not in the UI), `experiment` (`{name, yaml}`: replaces that experiment, or adds one when `name` is empty), `removeExperiment` (`{name}`), `experimentCap` (`{name, maxDurationSec}`: sets only that line). 409 if the file changed since `hash`, 422 if the result is invalid |
+| PATCH | `/api/config` | Save one change and sync: `{hash, <part>}` with one of `environment`, `dependency`, `service`, `addDependency`, `addService`, `addCommand` (`{service, name, run, cwd, timeoutSec}`), `command` (same fields: replaces that command's), `removeCommand` (`{service, name}`) (the three command parts are not in the UI), `experiment` (`{name, yaml}`: replaces that experiment, or adds one when `name` is empty), `removeExperiment` (`{name}`), `experimentCap` (`{name, maxDurationSec}`: sets only that line). 409 if the file changed since `hash`, 422 if the result is invalid |
 | GET | `/api/experiments/{name}/source` | One experiment as written in `entropy.yaml`, comments included, plus the file's `hash`, for the editor |
 | POST | `/api/dependencies/{name}/fault` | Apply a fault: `{type, durationSec, …options}` (see step 5: `latencyMs`, `jitterMs`, `timeoutMs`, `downSec`, `upSec`). 409 if it already has one, 422 if invalid |
 | DELETE | `/api/dependencies/{name}/fault` | Stop the dependency's fault now |

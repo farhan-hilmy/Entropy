@@ -70,6 +70,13 @@ type stopCause struct{ reason string }
 
 func (c stopCause) Error() string { return c.reason }
 
+// phaseEnd ends a phase on schedule (the faults ended, the recovery window
+// ended), as opposed to the run being aborted. A request still going then got
+// no answer in time, which counts as a result.
+type phaseEnd struct{ reason string }
+
+func (c phaseEnd) Error() string { return c.reason }
+
 // StartRun starts the experiment in the background and returns the new run.
 func (a *App) StartRun(ctx context.Context, name string) (store.Run, error) {
 	exps, err := a.store.Experiments(ctx)
@@ -344,6 +351,8 @@ type result struct {
 	Status     int       `json:"status,omitempty"`
 	Body       string    `json:"body,omitempty"`
 	Error      string    `json:"error,omitempty"`
+	// CutOff: no answer before the phase ended; DurationMs is then a lower bound.
+	CutOff bool `json:"cutOff,omitempty"`
 }
 
 // runner holds one run's state while it executes.
@@ -443,7 +452,7 @@ func (r *runner) execute(ctx context.Context) (verdict, reason string) {
 	faultsOver := make(chan struct{})
 	go func() {
 		faultErr = <-faultsDone
-		endDuring(stopCause{"the faults ended"})
+		endDuring(phaseEnd{"the faults ended"})
 		close(faultsOver)
 	}()
 	r.runTriggers(duringCtx, "during")
@@ -467,7 +476,8 @@ func (r *runner) execute(ctx context.Context) (verdict, reason string) {
 	r.mu.Unlock()
 
 	r.phase(ctx, "after")
-	afterCtx, cancel := context.WithTimeout(ctx, time.Duration(r.exp.RecoveryWindowSec)*time.Second)
+	afterCtx, cancel := context.WithTimeoutCause(ctx, time.Duration(r.exp.RecoveryWindowSec)*time.Second,
+		phaseEnd{"the recovery window ended"})
 	var wg sync.WaitGroup
 	wg.Go(func() { r.runTriggers(afterCtx, "after") })
 	wg.Go(func() { r.watchRecovery(afterCtx) })
@@ -723,12 +733,30 @@ func (r *runner) runTriggers(ctx context.Context, phase string) {
 				start := time.Now()
 				res := r.fire(ctx, t, i+1)
 				if ctx.Err() != nil {
-					// Cut off by the end of its phase: it doesn't count.
-					r.event("system", fmt.Sprintf("%s #%d was cut off and doesn't count: %v", t.Name, i+1, context.Cause(ctx)), nil)
+					var end phaseEnd
+					if !errors.As(context.Cause(ctx), &end) {
+						// The run was aborted: it doesn't count.
+						r.event("system", fmt.Sprintf("%s #%d was cut off and doesn't count: %v", t.Name, i+1, context.Cause(ctx)), nil)
+						return
+					}
+					if !r.hung(t, phase, time.Duration(res.DurationMs)*time.Millisecond) {
+						r.event("system", fmt.Sprintf("%s #%d was cut off and doesn't count: %s (it started too late to finish)", t.Name, i+1, end.reason), nil)
+						return
+					}
+					// Still waiting when its phase ended, after plenty of time: no
+					// answer, e.g. a request that hung through the whole fault.
+					r.noAnswer(t, res, fmt.Sprintf("no answer within %s (%s first)", ms(res.DurationMs), end.reason))
 					return
 				}
 				if phase == "during" && len(r.exp.Faults) > 0 && !r.faultOnAt(time.Now()) {
-					// It finished after the faults were over, so it says nothing about them.
+					if r.hung(t, phase, time.Duration(res.DurationMs)*time.Millisecond) {
+						// It waited through the fault and only got its answer once the
+						// fault was gone: no answer while it was on.
+						r.noAnswer(t, res, fmt.Sprintf("no answer while the faults were on: it got %s after %s, once they had ended", got(res), ms(res.DurationMs)))
+						return
+					}
+					// It started late and finished after the faults were over, so it
+					// says nothing about them.
 					r.event("system", fmt.Sprintf("%s #%d finished after the faults ended and doesn't count (%s)", t.Name, i+1, got(res)), res)
 					return
 				}
@@ -748,6 +776,40 @@ func (r *runner) runTriggers(ctx context.Context, phase string) {
 		})
 	}
 	wg.Wait()
+}
+
+// noAnswer records res as a result that got no answer in time: it matches no
+// expectation, and why is its error.
+func (r *runner) noAnswer(t config.Trigger, res result, why string) {
+	res.CutOff = true
+	res.Error = why
+	r.mu.Lock()
+	r.results[t.Name] = append(r.results[t.Name], res)
+	r.mu.Unlock()
+	r.event("response", describe(t, res), res)
+}
+
+func ms(d int64) time.Duration {
+	return (time.Duration(d) * time.Millisecond).Round(100 * time.Millisecond)
+}
+
+// hung reports whether a request of trigger t, still waiting after waited
+// when its phase ended, had plenty of time to answer: at least half the
+// phase, or longer than a maxMs some assertion on t allows. One that started
+// near the end just ran out of time; that says nothing about the service.
+func (r *runner) hung(t config.Trigger, phase string, waited time.Duration) bool {
+	r.mu.Lock()
+	started := r.phaseStart[phase]
+	r.mu.Unlock()
+	if !started.IsZero() && waited >= time.Since(started)/2 {
+		return true
+	}
+	for _, as := range r.exp.Assertions {
+		if as.Trigger == t.Name && as.Expect.MaxMs > 0 && waited > time.Duration(as.Expect.MaxMs)*time.Millisecond {
+			return true
+		}
+	}
+	return false
 }
 
 // fire sends one trigger: runs the command, or sends the request.
@@ -972,6 +1034,12 @@ func (r *runner) assess(i int, as config.Assertion, t config.Trigger) store.Asse
 }
 
 func matches(e config.Expect, x result) bool {
+	if x.CutOff {
+		return false // no answer at all
+	}
+	if e.MaxMs > 0 && x.DurationMs > int64(e.MaxMs) {
+		return false
+	}
 	if e.ExitCode != nil && (x.ExitCode == nil || *x.ExitCode != *e.ExitCode || x.Error != "") {
 		return false
 	}
@@ -1001,6 +1069,9 @@ func describeExpect(e config.Expect) string {
 	if e.BodyContains != "" {
 		parts = append(parts, fmt.Sprintf("body containing %q", e.BodyContains))
 	}
+	if e.MaxMs > 0 {
+		parts = append(parts, fmt.Sprintf("within %d ms", e.MaxMs))
+	}
 	return strings.Join(parts, " and ")
 }
 
@@ -1009,7 +1080,7 @@ func got(x result) string {
 	case x.Error != "":
 		return x.Error
 	case x.ExitCode != nil:
-		return fmt.Sprintf("exit code %d%s", *x.ExitCode, prefixed(": ", lastLine(x.Output)))
+		return fmt.Sprintf("exit code %d%s", *x.ExitCode, prefixed(": ", summaryLine(x.Output)))
 	default:
 		return fmt.Sprintf("status %d", x.Status)
 	}

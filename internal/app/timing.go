@@ -95,7 +95,8 @@ func (a *App) experimentTiming(ctx context.Context, e config.Experiment, svcs []
 			}
 			for _, ev := range run.Events {
 				var res result
-				if len(ev.Data) == 0 || json.Unmarshal(ev.Data, &res) != nil || res.Trigger == "" || res.DurationMs <= 0 {
+				// A cut-off result only says "longer than this": not a sample.
+				if len(ev.Data) == 0 || json.Unmarshal(ev.Data, &res) != nil || res.Trigger == "" || res.DurationMs <= 0 || res.CutOff {
 					continue
 				}
 				if t, ok := byName[res.Trigger]; ok {

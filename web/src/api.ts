@@ -134,7 +134,7 @@ export interface ExperimentDefinition {
     type: 'response' | 'count' | 'eventual' | 'recovery'
     trigger?: string
     service?: string
-    expect: { exitCode?: number; outputContains?: string; status?: number; bodyContains?: string }
+    expect: { exitCode?: number; outputContains?: string; status?: number; bodyContains?: string; maxMs?: number }
     atLeast?: number
     withinSec?: number
   }[]

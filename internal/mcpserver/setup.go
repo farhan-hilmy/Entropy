@@ -41,6 +41,12 @@ func (t *tools) registerSetup(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "add_command", Annotations: writes,
 		Description: "Adds a command to a service: a command line Entropy runs on this machine to call the service (e.g. `bru run …`, `curl -f …`), used in experiments and as a health check. Exit code 0 means success. Show the person the command line before adding it."},
 		t.addCommand)
+	mcp.AddTool(s, &mcp.Tool{Name: "update_command", Annotations: writes,
+		Description: "Changes a command's run, cwd or timeoutSec, e.g. when verify_route shows it doesn't reach the service. Fields left out keep their value. Show the person the new command line first."},
+		t.updateCommand)
+	mcp.AddTool(s, &mcp.Tool{Name: "remove_command", Annotations: writes,
+		Description: "Removes a command from a service. Refused (nothing changes) while the health check or an experiment still uses it."},
+		t.removeCommand)
 	mcp.AddTool(s, &mcp.Tool{Name: "verify_route", Annotations: &mcp.ToolAnnotations{OpenWorldHint: &no, IdempotentHint: true},
 		Description: "Checks that a service really reaches a dependency through Entropy's proxy: runs one of the service's commands (or its health check) normally and with latency on the proxy, and compares. Not verified means faults won't affect the service: point it at the dependency's address."},
 		t.verifyRoute)
@@ -65,7 +71,11 @@ func (t *tools) configReference(context.Context, *mcp.CallToolRequest, noInput) 
 // saved reports an edit's sync: warnings, then the state of what was added.
 func (t *tools) saved(ctx context.Context, what string, res EditResult, extra func(Environment, *strings.Builder)) *mcp.CallToolResult {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Saved %s in entropy.yaml.", what)
+	if strings.HasPrefix(what, "Removed ") {
+		b.WriteString(what) // a whole sentence
+	} else {
+		fmt.Fprintf(&b, "Saved %s in entropy.yaml.", what)
+	}
 	for _, w := range res.Sync.Warnings {
 		fmt.Fprintf(&b, "\nConfig warning: %s", w)
 	}
@@ -203,6 +213,62 @@ func (t *tools) addCommand(ctx context.Context, _ *mcp.CallToolRequest, in addCo
 	r := t.saved(ctx, "command "+in.Service+"/"+in.Name, res, nil)
 	r.Content = append(r.Content, &mcp.TextContent{Text: "\nTry it with run_command; use it as the health check with update_service healthCommand."})
 	return r, nil, nil
+}
+
+type updateCommandInput struct {
+	Service    string  `json:"service"`
+	Name       string  `json:"name" jsonschema:"the command to change"`
+	Run        *string `json:"run,omitempty" jsonschema:"the new command line"`
+	Cwd        *string `json:"cwd,omitempty" jsonschema:"empty string: back to the folder of entropy.yaml"`
+	TimeoutSec *int    `json:"timeoutSec,omitempty" jsonschema:"0: back to the default (30)"`
+}
+
+func (t *tools) updateCommand(ctx context.Context, _ *mcp.CallToolRequest, in updateCommandInput) (*mcp.CallToolResult, any, error) {
+	res, err := t.edit(ctx, "command", func(cfg ConfigSnapshot) (any, error) {
+		c, err := findCommand(cfg, in.Service, in.Name)
+		if err != nil {
+			return nil, err
+		}
+		set(&c.Run, in.Run)
+		set(&c.Cwd, in.Cwd)
+		set(&c.TimeoutSec, in.TimeoutSec)
+		return map[string]any{"service": in.Service, "name": c.Name, "run": c.Run, "cwd": c.Cwd, "timeoutSec": c.TimeoutSec}, nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return t.saved(ctx, "command "+in.Service+"/"+in.Name, res, nil), nil, nil
+}
+
+type commandRefInput struct {
+	Service string `json:"service"`
+	Name    string `json:"name" jsonschema:"the command to remove"`
+}
+
+func (t *tools) removeCommand(ctx context.Context, _ *mcp.CallToolRequest, in commandRefInput) (*mcp.CallToolResult, any, error) {
+	res, err := t.edit(ctx, "removeCommand", func(cfg ConfigSnapshot) (any, error) {
+		if _, err := findCommand(cfg, in.Service, in.Name); err != nil {
+			return nil, err
+		}
+		return in, nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return t.saved(ctx, "Removed command "+in.Service+"/"+in.Name+" from entropy.yaml.", res, nil), nil, nil
+}
+
+func findCommand(cfg ConfigSnapshot, service, name string) (RawCommand, error) {
+	i := slices.IndexFunc(cfg.Config.Services, func(s RawService) bool { return s.Name == service })
+	if i < 0 {
+		return RawCommand{}, fmt.Errorf("no service %q in entropy.yaml", service)
+	}
+	cmds := cfg.Config.Services[i].Commands
+	j := slices.IndexFunc(cmds, func(c RawCommand) bool { return c.Name == name })
+	if j < 0 {
+		return RawCommand{}, fmt.Errorf("service %s has no command %q in entropy.yaml", service, name)
+	}
+	return cmds[j], nil
 }
 
 type verifyRouteInput struct {
@@ -367,7 +433,7 @@ func setupPrompt(_ context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptRe
 	return promptResult("Set Entropy up for "+target, `Set Entropy up for `+target+`, so its dependencies can be broken on purpose.
 
 1. Call config_reference and entropy_status (to see what's already set up).
-2. Read the service's code and config (.env files, config files, compose files, the code that creates clients) and list each dependency it connects to: Redis, databases, queues, external HTTP APIs. For each, note the setting that holds its address and the real address.
+2. Read the service's code and config (.env files, config files, compose files, the code that creates clients) and list each dependency it connects to: Redis, databases, queues, external HTTP APIs. For each, note the setting that holds its address and the real address. If the service already points at proxy addresses, its config doesn't show the real ones: take them from the existing entropy.yaml or ask the person. Also note client timeouts and retries: they decide what a fault will do.
 3. Propose, in one message, before changing anything:
    - each dependency: name, kind, the proxy address the service will use, and the real upstream;
    - the service: name, baseUrl, health check, uses;
@@ -375,7 +441,7 @@ func setupPrompt(_ context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptRe
    - the changes to the service's own config, to point it at the proxy addresses.
    Ask the person to confirm. Never edit the hosts file yourself; give the line to add.
 4. After confirmation: add_dependency, add_service, add_command (and update_service healthCommand if a command is the health check). Change the service's config to the proxy addresses, and ask the person to restart the service.
-5. When it's restarted, run verify_route for each dependency with a command that uses it. Fix anything NOT SEEN before going on.
+5. When it's restarted, run verify_route for each dependency with a command that uses it. Fix anything NOT SEEN before going on: check the service's connection settings, and where the command really sends its request (a Bruno request can set its own URL variable that overrides --env-var); fix the command with update_command, and remove_command the ones that aren't needed.
 6. Summarize what's set up, and suggest running the "suite" prompt to test every dependency.`), nil
 }
 
@@ -384,9 +450,10 @@ func suitePrompt(_ context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptRe
 	return promptResult("Chaos test every dependency of "+target, `Build and run a chaos test suite for `+target+`: an experiment per dependency and fault.
 
 1. Call config_reference, entropy_status and suite_report to see the setup and what's covered already.
-2. For each dependency the service uses, read how the service uses it (a cache? primary storage? an external API?) and which of its commands go through it.
-3. Propose the suite in one message, as a table: experiment name (<dependency>-<fault>-<service>), the fault, the requests, and the EXPECTED BEHAVIOUR in plain words (e.g. "tokens still issued, slower", "clean 503 during the outage, works again within 20 s"). Use the defaults in config_reference: outage for every dependency, latency for every dependency, flap only for long-lived connections. Skip a dependency no command reaches, and say so. Ask the person to confirm or change the expected behaviour: it's their decision, not yours.
-4. Save the confirmed experiments with save_experiment. Fix any timing warning (maxDurationSec) it reports.
-5. Run them one at a time with run_experiment, outages first. Only one run can happen at a time, and each breaks the dependency for every service using it.
-6. Show suite_report. For each experiment that didn't pass: why (get_run), and where in the service's code the behaviour comes from. Propose fixes; don't change the service's code unless the person asks.`), nil
+2. For each dependency the service uses, read how the service uses it (a cache? primary storage? an external API?), its client's timeouts and retries, and which of its commands go through it.
+3. Look for side effects of slow or failed requests: alerts or notifications (e.g. a "slow request" message to a chat through a message queue), logs or traces sent to shared systems. Tell the person, and with their agreement point them somewhere harmless for the test (e.g. an unused local address in the service's env, then restart it).
+4. Propose the suite in one message, as a table: experiment name (<dependency>-<fault>-<service>), the fault, the requests, and the EXPECTED BEHAVIOUR in plain words (e.g. "tokens still issued, slower", "clean 503 within 10 s during the outage, works again within 20 s"). Express time limits with maxMs. Use the defaults in config_reference: outage for every dependency, latency for every dependency, flap only for long-lived connections. Skip a dependency no command reaches, and say so. Ask the person to confirm or change the expected behaviour: it's their decision, not yours.
+5. Save the confirmed experiments with save_experiment (quote values that contain ": "). Fix any timing warning (maxDurationSec) it reports.
+6. Run them one at a time with run_experiment, outages first. Only one run can happen at a time, and each breaks the dependency for every service using it.
+7. Show suite_report. For each experiment that didn't pass: why (get_run; "no answer within N s" means the request hung), and where in the service's code the behaviour comes from (timeouts, retries, error handling). Propose fixes; don't change the service's code unless the person asks.`), nil
 }

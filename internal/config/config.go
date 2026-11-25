@@ -112,6 +112,23 @@ func Load(path string) (*Config, error) {
 	return parse(data, path)
 }
 
+// yamlHints say how to fix YAML errors whose own message doesn't.
+var yamlHints = []struct{ match, hint string }{
+	{"mapping values are not allowed", `a value on that line contains ": "; put the value in quotes, e.g. description: "Expected: a clean 500"`},
+	{"did not find expected key", "check the indentation of that line against the lines above it"},
+	{"found character that cannot start any token", "a tab, or a character like @ or ` at the start of a value: indent with spaces, quote the value"},
+}
+
+// withHint adds a hint on how to fix err, if one is known.
+func withHint(err error) error {
+	for _, h := range yamlHints {
+		if strings.Contains(err.Error(), h.match) {
+			return fmt.Errorf("%w (hint: %s)", err, h.hint)
+		}
+	}
+	return err
+}
+
 // decode reads the file's content as written, without defaults or validation.
 func decode(data []byte, path string) (*Config, error) {
 	var cfg Config
@@ -121,7 +138,7 @@ func decode(data []byte, path string) (*Config, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("%s: file is empty", path)
 		}
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, fmt.Errorf("%s: %w", path, withHint(err))
 	}
 	return &cfg, nil
 }

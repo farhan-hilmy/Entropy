@@ -109,6 +109,22 @@ type NewCommand struct {
 	TimeoutSec int    `json:"timeoutSec"`
 }
 
+// CommandFields replaces an existing command's run, cwd and timeoutSec
+// (API only, like NewCommand). Empty cwd and 0 timeoutSec remove the key.
+type CommandFields struct {
+	Service    string `json:"service"`
+	Name       string `json:"name"`
+	Run        string `json:"run"`
+	Cwd        string `json:"cwd"`
+	TimeoutSec int    `json:"timeoutSec"`
+}
+
+// CommandRef names one command of a service.
+type CommandRef struct {
+	Service string `json:"service"`
+	Name    string `json:"name"`
+}
+
 // ExperimentText is one experiment as YAML, as the experiment editor shows
 // it: a mapping (name, faults, triggers, …), comments included. Experiments
 // only name commands from the file, so editing them can't add code to run.
@@ -141,6 +157,8 @@ type Edit struct {
 	AddDependency    *NewDependency     `json:"addDependency,omitempty"`
 	AddService       *NewService        `json:"addService,omitempty"`
 	AddCommand       *NewCommand        `json:"addCommand,omitempty"`
+	Command          *CommandFields     `json:"command,omitempty"`
+	RemoveCommand    *CommandRef        `json:"removeCommand,omitempty"`
 	Experiment       *ExperimentText    `json:"experiment,omitempty"`
 	RemoveExperiment *Named             `json:"removeExperiment,omitempty"`
 	ExperimentCap    *ExperimentCap     `json:"experimentCap,omitempty"`
@@ -191,15 +209,18 @@ func Apply(path, hash string, e Edit) (string, error) {
 func (e Edit) apply(cfg *Config, doc *yaml.Node, ed *editor) error {
 	set := 0
 	for _, part := range []bool{e.Environment != nil, e.Dependency != nil, e.Service != nil, e.AddDependency != nil, e.AddService != nil,
-		e.AddCommand != nil, e.Experiment != nil, e.RemoveExperiment != nil, e.ExperimentCap != nil} {
+		e.AddCommand != nil, e.Command != nil, e.RemoveCommand != nil, e.Experiment != nil, e.RemoveExperiment != nil, e.ExperimentCap != nil} {
 		if part {
 			set++
 		}
 	}
 	if set != 1 {
-		return errors.New("an edit sets exactly one of environment, dependency, service, addDependency, addService, addCommand, experiment, removeExperiment or experimentCap")
+		return errors.New("an edit sets exactly one of environment, dependency, service, addDependency, addService, addCommand, command, removeCommand, experiment, removeExperiment or experimentCap")
 	}
 	switch {
+	case e.Command != nil, e.RemoveCommand != nil:
+		return editCommand(cfg, doc, ed, e.Command, e.RemoveCommand)
+
 	case e.AddCommand != nil:
 		f := e.AddCommand
 		m, err := item(doc, "services", "service", f.Service)
@@ -326,6 +347,55 @@ func (e Edit) apply(cfg *Config, doc *yaml.Node, ed *editor) error {
 			ed.set(m, "uses", list(f.Uses)),
 		)
 	}
+}
+
+// editCommand changes (set) or removes (rm) one command of a service.
+// Removing one that the health command or an experiment still uses fails the
+// config check, so nothing changes.
+func editCommand(cfg *Config, doc *yaml.Node, ed *editor, set *CommandFields, rm *CommandRef) error {
+	service, name := "", ""
+	if set != nil {
+		service, name = set.Service, set.Name
+	} else {
+		service, name = rm.Service, rm.Name
+	}
+	sm, err := item(doc, "services", "service", service)
+	if err != nil {
+		return err
+	}
+	cm, err := item(sm, "commands", "command of "+service, name)
+	if err != nil {
+		return err
+	}
+	si := slices.IndexFunc(cfg.Services, func(s Service) bool { return s.Name == service })
+	cmds := &cfg.Services[si].Commands
+	ci := slices.IndexFunc(*cmds, func(c Command) bool { return c.Name == name })
+	if ci < 0 {
+		return fmt.Errorf("%w: no command %s/%s in the config file", ErrNotFound, service, name)
+	}
+
+	if rm != nil {
+		if _, err := ed.dashColumn(cm); err != nil {
+			return err
+		}
+		*cmds = slices.Delete(*cmds, ci, ci+1)
+		if len(*cmds) == 0 {
+			*cmds = nil // as "commands:" with nothing under it decodes
+		}
+		ed.replace(cm.Line, lastLine(cm))
+		return nil
+	}
+	c := &(*cmds)[ci]
+	c.Run, c.Cwd, c.TimeoutSec = set.Run, set.Cwd, set.TimeoutSec
+	timeout := ""
+	if set.TimeoutSec != 0 {
+		timeout = strconv.Itoa(set.TimeoutSec)
+	}
+	return errors.Join(
+		ed.set(cm, "run", required(set.Run)),
+		ed.set(cm, "cwd", optional(set.Cwd)),
+		ed.set(cm, "timeoutSec", timeout),
+	)
 }
 
 // Values as YAML text. "" means: remove the key.

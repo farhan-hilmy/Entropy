@@ -152,7 +152,7 @@ func parseExperimentText(text string) (Experiment, []string, error) {
 	var node yaml.Node
 	dec := yaml.NewDecoder(strings.NewReader(src))
 	if err := dec.Decode(&node); err != nil {
-		return Experiment{}, nil, fmt.Errorf("experiment: %w", err)
+		return Experiment{}, nil, fmt.Errorf("experiment: %w", withHint(err))
 	}
 	if node.Kind != yaml.DocumentNode || len(node.Content) != 1 || node.Content[0].Kind != yaml.MappingNode || node.Content[0].Style&yaml.FlowStyle != 0 {
 		return Experiment{}, nil, errors.New("experiment: write one experiment as keys and values (name: …, faults: …), one per line")

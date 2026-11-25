@@ -30,6 +30,10 @@ dependencies:
   its connection setting (e.g. REDIS_ADDR, MONGO_URI, a base URL in .env) to
   the proxy address, and have the person restart it. Until then faults have
   no effect on it.
+- The service may already point at proxy addresses (from an earlier setup);
+  then its config no longer shows the REAL addresses (maybe only in
+  commented-out lines). Look in the existing entropy.yaml (entropy_status)
+  or ask the person; don't guess an upstream.
 
 ## Services (add_service, update_service)
 
@@ -51,6 +55,11 @@ services:
   `bru run …` (Bruno), `curl -f …`, a script. Prefer requests that really use
   the dependency under test (e.g. issuing a token reads and writes Redis).
 - Commands get ENTROPY_BASE_URL (the service's baseUrl) and ENTROPY_SERVICE.
+- Check where a command really sends its request: verify_route says NOT SEEN
+  when it doesn't reach the service through the proxy. A Bruno request can
+  set its own URL variable (under `runtime: variables:` in its .yml), which
+  overrides the environment and `--env-var`, so it may call a shared server
+  instead of the local service. Fix the command with update_command.
 - Plain HTTP requests can be used in experiments without a command (see
   `request:` below).
 
@@ -76,7 +85,7 @@ triggers:                    # what to send, per phase: baseline | during | afte
 recoveryWindowSec: 30        # how long "after" lasts (default 30)
 assertions:
   - { type: response, trigger: before, expect: { exitCode: 0 } }       # every result matches
-  - { type: count, trigger: during, atLeast: 1, expect: { outputContains: "503" } }
+  - { type: count, trigger: during, atLeast: 1, expect: { outputContains: "503", maxMs: 10000 } }
   - { type: eventual, trigger: after, withinSec: 20, expect: { exitCode: 0 } }  # one matches in time
   - { type: recovery, service: oauth, withinSec: 30 }                   # health check passes again
 verifyWith: { oauth: during }   # optional: the trigger the preflight uses to check the route
@@ -93,8 +102,19 @@ Fault types (each has `durationSec`, 1–3600):
 | flap | down and up in turns | downSec, upSec (default 5 each) |
 
 `expect`: commands have `exitCode` and `outputContains`; requests have
-`status` and `bodyContains`. A baseline assertion that fails makes the run
-inconclusive (the service wasn't healthy to begin with).
+`status` and `bodyContains`; both have `maxMs`, the longest a result may take
+(e.g. "a clean error within 10 s, not a hang"). A baseline assertion that
+fails makes the run inconclusive (the service wasn't healthy to begin with).
+
+A request that gets no answer while its phase lasts (e.g. it hangs through
+the whole fault) is a result: "no answer within N s", which matches no
+expectation, so the assertion fails. One that only started near the end of
+the phase doesn't count.
+
+Quote a value that contains ": " (e.g. `description: "Expected: a clean
+500"`), or the YAML is invalid. Bruno exits 0 even on a 500 unless the
+request has tests, so match the status it prints, e.g. `outputContains:
+"(200 OK)"` or `"(500"`.
 
 ## A suite per dependency
 
@@ -118,3 +138,9 @@ plain words and let the person confirm before saving:
 
 Name experiments `<dependency>-<fault>-<service>`, e.g. `redis-outage-oauth`,
 so `suite_report` can group them.
+
+Side effects: slow or failed requests can make a service send alerts and
+notifications (e.g. a "slow request" message to a chat through a message
+queue), logs or traces to shared systems. Look for them in the code before
+a suite, tell the person, and point them somewhere harmless for the test
+(e.g. an unused local address in the service's env) with their agreement.

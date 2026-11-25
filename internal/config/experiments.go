@@ -96,6 +96,9 @@ type Expect struct {
 	OutputContains string `yaml:"outputContains,omitempty" json:"outputContains,omitempty"`
 	Status         int    `yaml:"status,omitempty" json:"status,omitempty"`
 	BodyContains   string `yaml:"bodyContains,omitempty" json:"bodyContains,omitempty"`
+	// MaxMs is the longest a result may take, for commands and requests:
+	// e.g. a clean error within 10 s rather than a hang.
+	MaxMs int `yaml:"maxMs,omitempty" json:"maxMs,omitempty"`
 }
 
 var (
@@ -350,8 +353,10 @@ func (v *validator) assertion(label string, a Assertion, triggers map[string]Tri
 	}
 	e := a.Expect
 	switch {
+	case e.MaxMs < 0:
+		v.bad("%s: maxMs must be 0 (no limit) or more", label)
 	case e == (Expect{}):
-		v.bad("%s: expect needs at least one of exitCode, outputContains (commands) or status, bodyContains (requests)", label)
+		v.bad("%s: expect needs at least one of exitCode, outputContains (commands), status, bodyContains (requests) or maxMs", label)
 	case t.Command != "" && (e.Status != 0 || e.BodyContains != ""):
 		v.bad("%s: trigger %s runs a command: expect exitCode or outputContains, not status or bodyContains", label, t.Name)
 	case t.Request != nil && (e.ExitCode != nil || e.OutputContains != ""):
